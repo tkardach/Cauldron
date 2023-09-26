@@ -1,8 +1,6 @@
 // This #include statement was automatically added by the Particle IDE.
-#include "LEDColor.h"
-
-// This #include statement was automatically added by the Particle IDE.
 #include <neopixel.h>
+#include "LEDColor.h"
 #include "application.h"
 
 LEDColor *led1 = new LEDColor(255, 70, 0);   // orange
@@ -16,6 +14,10 @@ LEDColor *white = new LEDColor(0, 0, 0);  // white
 
 Timer *interTimer;      // pointer for timer
 const int firmwareVersion = 191; // divide by 10 to get 1.9, ...
+
+#define PIXEL_COUNT 50  // number of LEDs in strip
+#define PIXEL_PIN D2    // dataline for the LED strip
+#define PIXEL_TYPE WS2811   // LED controller used
 
 /* ======================= prototypes =============================== */
 void colorAll(uint32_t c, uint8_t wait);
@@ -46,12 +48,6 @@ void duelLedsOn(int led, uint8_t dim);
 void singleLedOn(int led, uint8_t dim);
 LEDColor getLedColor(int led);
 int LedLessTen(int led);
-
-
-
-#define PIXEL_COUNT 50  // number of LEDs in strip
-#define PIXEL_PIN D1    // dataline for the LED strip
-#define PIXEL_TYPE WS2811   // LED controller used
 
 int HALF_PIXEL_COUNT = PIXEL_COUNT / 2;
 
@@ -209,10 +205,8 @@ void ledDim(int bank, uint8_t dim)  {
 int ledLessTen(int led)  {
     if(led < 10) {
         return led;
-    } else {
-        ledLessTen(led - 10);
     }
-    return 0;   // should never get here
+    return ledLessTen(led-10);
 }
 
 void allLedsDim(uint8_t dim) {
@@ -280,6 +274,7 @@ void startBlinkingLeds(uint16_t interval)  {
 void stopLedsTimer() {
     interTimer -> stop();
     interTimer -> dispose();
+    allOff();
 }
 
 // this turns on the Leds (even LEDs) in 5 colors, and a dim white LED
@@ -304,13 +299,27 @@ void allOff() {
     for(uint8_t led = 0; led < strip.numPixels(); led++) {
         setPixelColorDim(led, black, 0);
     }
+    strip.show();
 }
 
 
 void setup() {
   strip.begin();
   strip.show(); // Initialize all pixels to 'off'
+  //delay(500);
   
+  //rainbowCycle(1000);
+  startBroadwayLeds(700);  // flashes lights every 1/2 second
+  delay(10000);
+  stopLedsTimer();
+  
+  startRunningSingleLed(700); 
+  delay(10000);
+  stopLedsTimer();
+  
+//   startRunningBankLeds(100);
+//   delay(10000);
+//   stopLedsTimer();
 }
 
 void loop() {
