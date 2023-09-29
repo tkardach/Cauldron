@@ -1,6 +1,7 @@
 import abc
-from led_strip import LedStrip
+from led.led_strip import LedStrip
 import math
+import numpy as np
 import threading
 
 
@@ -16,82 +17,70 @@ class LedEffect(abc.ABC):
 class SineWaveEffect(LedEffect):
     """Applies a modifyable sine wave effect onto an LedStrip."""
 
-    def __init__(self, a: float = 127, b: float = 1, y_offset: int = 127,
-                 oscillate: bool = False, oscillation_speed_ms: int = 250):
-        super(LedEffect, self).__init__()
-        self.amplitude = a
-        self.wave_length = b
-        self.y_offset = y_offset
-        self.oscillate = oscillate
-        self.oscillation_speed_ms = oscillation_speed_ms
-    
-        self._current_a = -a
-        self._oscillating_up = True
+    def __init__(self, color0: list, color1: list, b: float = 1, oscillate: bool = False,
+                 oscillation_speed_ms: int = 250):
+        assert len(color0) == len(color1)
+        LedEffect.__init__(self)
         self._lock = threading.Lock()
+        # Convert colors to numpy arrays
+        self._color0 = np.array(color0)
+        self._color1 = np.array(color1)
+        self.oscillation_speed_ms = oscillation_speed_ms
+        self._oscillate = oscillate
+        self.wave_length = b
 
-    def _get_brightness_for_pixel_locked(self, x: int) -> int:
-        assert self._lock.locked()
-        return self._a * math.sin(self._b * (x)) + self._y_offset
+        # Offset the wave so that each color is above or equal to 0
+        self._y_offsets = np.abs((self._color0 - self._color1) / 2) + np.minimum(self._color0, self._color1)
+        # Keep track of the current amplitude value
+        self._amplitudes = np.array([(self._color0 - self._color1) / 2])
+        self._current_a = self._amplitudes.copy()
+        #
+        self._amplitude_inc = (2 * np.pi) / self._oscillation_inc
+        self._amplitude_x = 0
 
-    def _update_oscillation_locked(self):
-        assert self._lock.locked()
-        if not self._oscillate:
-            return
-        
-        a_inc = (self._a * 2) / self._oscillation_inc
-        self._current_a += a_inc if self._oscillating_up else -a_inc
-        if self._current_a < -self._a:
-            self._current_a = -self._a
-            self._oscillating_up = not self._oscillating_up
-        elif self._current_a > self._a:
-            self._current_a = self._a
-            self._oscillation_up = not self._oscillation_up
-
-    def get_brightness_for_pixel(self, x: int):
+    def _update_pixel_values_locked(self, x: np.array) -> np.array:
         """Returns the brightness value (y-value) of the sine wave.
 
         The sine wave equation is as follows:
 
-        y = brightness
-        x = LED
+        y = new color value
+        x = x value for LED
         a = amplitude
         b = wave length
-        y_offset = y offset
 
-        y = a * sin(b * x) + y_offset
+        y = a * sin(b * x)
 
         If oscillation is on, the value of 'a' will range from "-a -> a" then
         "a -> -a" continuously.
         """
-        with self._lock:
-            return self._get_brightness_for_pixel_locked(x)
+        assert self._lock.locked()
+        pixels = np.zeros((len(x), len(self._current_a)))
+        pixels = np.cos(self._b * x).T * self._current_a + self._y_offsets
+        return pixels
 
-    def update_oscillation(self):
+    def _update_oscillation_locked(self):
         """Updates the sine wave variables if oscillation is on.
         
         Oscillation will cause the amplitude of the sine wave to range between
         "a -> -a" then "-a -> a" continuously.
         """
-        self._update_oscillation_locked()
-                
+        assert self._lock.locked()
+        if not self._oscillate:
+            return
+        self._amplitude_x += self._amplitude_inc
+        self._current_a = self._amplitudes * np.cos(self._amplitude_x)
+
     def apply_effect(self, strip: LedStrip) -> None:
         """Applies the sine wave effect onto the LedStrip."""
         num_pixels = strip.num_pixels()
-        increments = math.pi / num_pixels
+        two_pi = np.pi * 2
+        x_values = np.array([np.arange(0, two_pi, two_pi / num_pixels)])
         with self._lock:
-            for pixel in range(0, num_pixels):
-                brightness = self._get_brightness_for_pixel_locked(pixel * increments)
+            pixels = self._update_pixel_values_locked(x_values)
+            strip.fill(pixels)
+            self._update_oscillation_locked()
 
         strip.show()
-
-    @property
-    def amplitude(self) -> float:
-        return self._a
-    
-    @amplitude.setter
-    def amplitude(self, a: float) -> None:
-        with self._lock:
-            self._a = a
 
     @property
     def wave_length(self) -> float:
@@ -101,15 +90,6 @@ class SineWaveEffect(LedEffect):
     def wave_length(self, b: float) -> None:
         with self._lock:
             self._b = b
-
-    @property
-    def y_offset(self) -> float:
-        return self._y_offset
-    
-    @y_offset.setter
-    def y_offset(self, offset: float) -> None:
-        with self._lock:
-            self._y_offset = offset
 
     @property
     def oscillate(self) -> bool:

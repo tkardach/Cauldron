@@ -1,6 +1,7 @@
 env
-**/__pycache__
-**/*.*egg-info
+__pycache__
+*.egg-info
+pyproject.toml
 src
 lib
 target
