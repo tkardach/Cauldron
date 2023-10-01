@@ -13,17 +13,17 @@ class LedStrip(abc.ABC):
         return None
 
     @abc.abstractmethod
-    def fill(self, pixels: np.array) -> int:
+    def fill_copy(self, pixels: np.array) -> int:
         return 0
-    
+
     @abc.abstractmethod
     def set_pixel_color(self, index: int, color: tuple) -> None:
         return None
-    
+
     @abc.abstractmethod
     def set_brightness(self, brightness: int) -> None:
         return None
-    
+
     @abc.abstractmethod
     def num_pixels(self) -> int:
         return 0
@@ -46,9 +46,9 @@ class MockStrip(LedStrip):
         assert len(color) == _RGB_COLOR_SIZE
         self._pixels = [color] * self._num_pixels
 
-    def fill(self, colors: np.array) -> int:
-        assert colors.shape == self._pixels.shape, f"{colors.shape} != {self._pixels.shape}"
-        self._pixels = colors.copy()
+    def fill_copy(self, pixels: np.array) -> int:
+        assert pixels.shape == self._pixels.shape, f"{colors.shape} != {self._pixels.shape}"
+        self._pixels = pixels.copy()
     
     def set_pixel_color(self, index: int, color: list) -> None:
         assert len(color) == _RGB_COLOR_SIZE
@@ -68,23 +68,25 @@ class MockStrip(LedStrip):
 class NeoPixelStrip(LedStrip):
     def __init__(self, neopixel: NeoPixel):
         self.neopixel = neopixel
-    
+
     def fill(self, color: list) -> None:
         assert len(color) == _RGB_COLOR_SIZE
-        self.neopixel.fill(color)
+        self.neopixel.fill(np.floor(color).tolist())
 
-    def fill(self, colors: np.array) -> int:
-        assert len(colors) == len(self._pixels)
-        self._pixels[:] = colors.tolist()
-    
+    def fill_copy(self, pixels: np.array) -> int:
+        assert len(pixels) == len(self.neopixel)
+        self.neopixel[:] = np.floor(pixels).tolist()
+
     def set_pixel_color(self, index: int, color: list) -> None:
         assert len(color) == _RGB_COLOR_SIZE
         self.neopixel[index] = color
-    
+
     def set_brightness(self, brightness: int) -> None:
         self.neopixel.brightness = brightness
-    
+
+    def num_pixels(self) -> int:
+        return len(self.neopixel)
+
     def show(self) -> None:
         if not self.neopixel.auto_write:
             self.neopixel.show()
-

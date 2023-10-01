@@ -3,18 +3,16 @@
     "editor.defaultFormatter": "ms-python.black-formatter",
     "editor.formatOnSave": true
   },
-  "black-formatter.args": [
-    "--line-length=79"
-  ],
   "python.analysis.extraPaths": [
     "./app"
   ],
+  "python.linting.pylintArgs": [
+    "--indent-string='    '"
+  ],
+  "python.linting.pylintEnabled": true,
   "python.formatting.provider": "none",
   "editor.tabSize": 4,
   "editor.rulers": [
     80
-],
-"python.formatting.blackArgs": [
-    "--line-length=79"
-],
+  ],
 }
