@@ -1,15 +1,11 @@
-import board
 import led.led_effect as led
 import led.led_strip as strip
 import matplotlib.animation as animation
 import matplotlib.pyplot as plt
-import neopixel
 import numpy as np
 import time
 
 NUM_PIXELS = 50
-PIXEL_ORDER = neopixel.RGB
-PIXEL_PIN = board.D18
 
 class TestEffect():
     x = np.arange(0, NUM_PIXELS, 1)
