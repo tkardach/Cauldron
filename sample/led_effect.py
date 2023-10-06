@@ -1,6 +1,8 @@
 import led.led_effect as led
 import led.led_strip as strip
 import matplotlib.animation as animation
+import led.led_effect as led_effect
+import led.led_strip as led_strip
 import matplotlib.pyplot as plt
 import numpy as np
 import time
@@ -25,6 +27,8 @@ class TestEffect():
             plt.pause(effect.frame_speed_ms / 1000)
 
         plt.show()
+from test_tools import TestEffect, NUM_PIXELS
+import time
 
 
 def test_mock_sine_wave():
@@ -45,6 +49,14 @@ def test_rpi_neopixel_sine_wave():
     mock_strip = led_strip.NeoPixelStrip(device)
 
     TestEffect.test_effect(mock_strip, sine_wave)
+
+    sine_wave = led_effect.SineWaveEffect(
+        color0, color1, oscillate=True, b=5, oscillation_speed_ms=1000
+    )
+    mock_strip = led_strip.MockStrip(NUM_PIXELS)
+    player = led_effect.MockEffectPlayer(mock_strip, sine_wave)
+    handle = player.play()
+    time.sleep(10)
 
 
 # test_bubble_effect()

@@ -1,7 +1,12 @@
 env
+<<<<<<< HEAD
 __pycache__
 *.egg-info
 pyproject.toml
+=======
+**/__pycache__
+**/*.*egg-info
+>>>>>>> Add audio implementation
 src
 lib
 target
