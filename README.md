@@ -64,6 +64,7 @@ MockStrip uses a (NUM_PIXELS x 3) numpy array to represent an RGB LED strip. We 
 ## TODO
 
 ### In order of importance
+1. Refactor the sample code. Should be separated by on-device and host.
 1. Establish interprocess communication layer to control Cauldron
     a. Should have a configuration and interface.  
     b. Interface should be decypherable across processes.  
