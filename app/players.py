@@ -168,7 +168,13 @@ class LedEffectPlayer(Player):
 
     def play(self):
         """Plays the LedEffect for 5 seconds."""
+        self._effect.reset()
         return self.play_for()
+
+    def loop(self) -> Handle:
+        """Plays the LedEffect on a loop."""
+        self._effect.reset()
+        return self._create_thread(self._loop)
 
     def stop(self, wait: bool = False):
         """Stops the LedEffect."""

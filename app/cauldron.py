@@ -1,25 +1,43 @@
 import abc
+from enum import Enum
+from typing import Tuple
 import led_effect
 import led_strip
+import os
 import players
 from pydub import AudioSegment
 from random import choice
 import threading
 
 
-BUBBLE_LENGTHS = [7, 9, 11]
-BUBBLE_POP_SPEEDS = [3000, 4000, 5000]
-BUBBLE_PROB_WEIGHTS = [0.5, 0.25, 0.25]
-BUBBLE_SPAWN_PROB = 0.05
-BUBBLING_SOUND = "app/files/audio/bubbles.wav"
-CAULDRON_COLORS = [
+_AUDIO_BUBBLING = "bubbles.wav"
+_AUDIO_DEMON = ["evie.wav", "porter.wav", "creepy_laugh0.wav"]
+_AUDIO_EXPLOSION = "poof.wav"
+_AUDIO_WITCH = ["witch0.wav", "witch1.wav", "witch_closer.wav"]
+_AUDIO_PATH = "app/files/audio/"
+_BUBBLE_LENGTHS = [7, 9, 11]
+_BUBBLE_POP_SPEEDS = [3000, 4000, 5000]
+_BUBBLE_PROB_WEIGHTS = [0.5, 0.25, 0.25]
+_BUBBLE_SPAWN_PROB = 0.05
+_CAULDRON_COLORS = [
     ([32, 139, 25], [215, 232, 23]),
     ([142, 75, 166], [237, 114, 178]),
     ([255, 179, 0], [255, 0, 60]),
     ([235, 57, 21], [76, 172, 194]),
 ]
-EXPLOSION_SOUND = "app/files/audio/poof.wav"
-MAX_BUBBLES = 10
+_MAX_BUBBLES = 10
+
+
+class CauldronSounds(Enum):
+    NONE = 0
+    RANDOM_WITCH = 1
+    WITCH_LAUGH0 = 2
+    WITCH_LAUGH1 = 3
+    WITCH_LAUGH2 = 4
+    RANDOM_DEMON = 5
+    DEMON_EVIE = 6
+    DEMON_PORTER = 7
+    DEMON_LAUGH = 8
 
 
 class ICauldron(abc.ABC):
@@ -42,6 +60,16 @@ class ICauldron(abc.ABC):
         """Causes the Cauldron to explode, changing the color."""
         return None
 
+    @abc.abstractmethod
+    def play_random_voice(self):
+        """Plays a random voice effect."""
+        return None
+
+    @abc.abstractmethod
+    def play_sound(self, type: CauldronSounds):
+        """Plays a random voice effect."""
+        return None
+
 
 class Cauldron(ICauldron):
     """Cauldron implementation."""
@@ -50,26 +78,41 @@ class Cauldron(ICauldron):
         self._lock = threading.Lock()
         self._strip = strip
 
+        # Initialize audio paths
+        self._bubbling_wav = os.path.join(_AUDIO_PATH, _AUDIO_BUBBLING)
+        self._explosion_wav = os.path.join(_AUDIO_PATH, _AUDIO_EXPLOSION)
+        self._witch_wavs = []
+        for wav in _AUDIO_WITCH:
+            self._witch_wavs.append(os.path.join(_AUDIO_PATH, wav))
+        self._demon_wavs = []
+        for wav in _AUDIO_DEMON:
+            self._demon_wavs.append(os.path.join(_AUDIO_PATH, wav))
+
         # Initialize color possibilities
-        self._colors = CAULDRON_COLORS
+        self._colors = _CAULDRON_COLORS
         self._current_color_index = 0
         self._current_colors = self._colors[self._current_color_index]
 
         # Initialize bubbling effects players
-        self._current_bubbling_effect = None
+        self._current_bubbling_effect: players.LedEffectPlayer = None
         self._bubbling_handle: players.Handle = None
+        self._bubbling_audio_player: players.AudioPlayer = None
+        self._bubbling_audio_handle: players.Handle = None
         self._init_bubbling_effects()
-        segment = AudioSegment.from_file(BUBBLING_SOUND)
-        segment.frame_rate = int(segment.frame_rate / 4)
-        self._bubbling_audio_player = players.AudioPlayer(segment)
 
         # Initialize explosion effects
-        self._current_explosion_effect = None
         self._explosion_handle: players.Handle = None
+        self._explosion_player: players.AudioVisualPlayer = None
         self._init_explosion_effects()
 
+        # Initialize voice audio effects
+        self._voice_handle: players.Handle = None
+        self._witch_audio: list[players.AudioVisualPlayer] = None
+        self._demon_audio: list[players.AudioVisualPlayer] = None
+        self._all_voices: list[players.AudioVisualPlayer] = None
+        self._init_voice_effects()
+
         # Start the common effect
-        self._bubbling_audio_handle = None
         self.start()
 
     def __del__(self):
@@ -103,36 +146,52 @@ class Cauldron(ICauldron):
             and self._bubbling_handle.is_playing()
         )
 
+    def _create_a2b_av_effect(
+        self, audio_segment
+    ) -> players.AudioVisualPlayer:
+        """Creates an AudioVisualPlayer using an AudioToBrightness effect."""
+        audio = players.AudioPlayer(audio_segment)
+
+        a2b_effect = led_effect.AudioToBrightnessEffect(
+            self._strip, audio_segment, frame_speed_ms=33
+        )
+        effect_player = players.LedEffectPlayer(a2b_effect)
+        av_player = players.AudioVisualPlayer(effect_player, audio)
+        return av_player
+
+    def _init_voice_effects(self):
+        """Initializes voice effects."""
+        self._witch_audio = [
+            self._create_a2b_av_effect(AudioSegment.from_file(wav))
+            for wav in self._witch_wavs
+        ]
+        self._demon_audio = [
+            self._create_a2b_av_effect(AudioSegment.from_file(wav))
+            for wav in self._demon_wavs
+        ]
+        self._all_voices = self._witch_audio + self._demon_audio
+
     def _init_explosion_effects(self):
-        segment = AudioSegment.from_file(EXPLOSION_SOUND)
+        """Initializes the cauldron's explosion effects."""
+        segment = AudioSegment.from_file(self._explosion_wav)
         segment = segment.set_sample_width(2)
         segment += 30
-        explosion_audio = players.AudioPlayer(segment)
-
-        self._current_explosion_effect = led_effect.AudioToBrightnessEffect(
-            self._strip, segment, frame_speed_ms=33
-        )
-        explosion_effect_player = players.LedEffectPlayer(
-            self._current_explosion_effect
-        )
-        self._explosion_av = players.AudioVisualPlayer(
-            explosion_effect_player, explosion_audio
-        )
-        self._explosion_handle = None
+        self._explosion_player = self._create_a2b_av_effect(segment)
 
     def _init_bubbling_effects(self):
+        """Initializes the bubbling effects."""
         self._bubbling_effects: list[players.LedEffectPlayer] = []
         for colors in self._colors:
             bubbling_effect = led_effect.BubblingEffect(
                 self._strip,
                 colors[0],
                 colors[1],
-                BUBBLE_LENGTHS,
-                BUBBLE_PROB_WEIGHTS,
-                BUBBLE_POP_SPEEDS,
-                BUBBLE_PROB_WEIGHTS,
-                MAX_BUBBLES,
-                BUBBLE_SPAWN_PROB,
+                _BUBBLE_LENGTHS,
+                _BUBBLE_PROB_WEIGHTS,
+                _BUBBLE_POP_SPEEDS,
+                _BUBBLE_PROB_WEIGHTS,
+                _MAX_BUBBLES,
+                _BUBBLE_SPAWN_PROB,
                 frame_speed_ms=33,
             )
             bubbling_effect_player = players.LedEffectPlayer(bubbling_effect)
@@ -140,7 +199,10 @@ class Cauldron(ICauldron):
         self._current_bubbling_effect = self._bubbling_effects[
             self._current_color_index
         ]
-        self._bubbling_handle = None
+
+        segment = AudioSegment.from_file(self._bubbling_wav)
+        segment.frame_rate = int(segment.frame_rate / 4)
+        self._bubbling_audio_player = players.AudioPlayer(segment)
 
     def _set_random_colors(self):
         """Selects a new set of colors and applies it to the LedStrip."""
@@ -170,6 +232,35 @@ class Cauldron(ICauldron):
         """Causing an explosion will change the color and strobe the lights."""
         if self._explosion_handle is not None:
             self._explosion_handle.stop_wait()
-        self._current_explosion_effect.reset()
         self._set_random_colors()
-        self._explosion_handle = self._explosion_av.play()
+        self._explosion_handle = self._explosion_player.play()
+
+    def play_random_voice(self):
+        """Plays a random voice."""
+        if self._voice_handle is not None:
+            self._voice_handle.stop_wait()
+        self._voice_handle = choice(self._all_voices).play()
+
+    def play_sound(self, type: CauldronSounds = CauldronSounds.NONE):
+        """Plays a sound using the given sound type."""
+        if self._voice_handle is not None:
+            self._voice_handle.stop_wait()
+        match type:
+            case CauldronSounds.RANDOM_WITCH:
+                self._voice_handle = choice(self._witch_audio).play()
+            case CauldronSounds.WITCH_LAUGH0:
+                self._voice_handle = self._witch_audio[0].play()
+            case CauldronSounds.WITCH_LAUGH1:
+                self._voice_handle = self._witch_audio[1].play()
+            case CauldronSounds.WITCH_LAUGH2:
+                self._voice_handle = self._witch_audio[2].play()
+            case CauldronSounds.RANDOM_DEMON:
+                self._voice_handle = choice(self._demon_audio).play()
+            case CauldronSounds.DEMON_EVIE:
+                self._voice_handle = self._demon_audio[0].play()
+            case CauldronSounds.DEMON_PORTER:
+                self._voice_handle = self._demon_audio[1].play()
+            case CauldronSounds.DEMON_LAUGH:
+                self._voice_handle = self._demon_audio[2].play()
+            case _:
+                return
