@@ -20,8 +20,8 @@ def wait_for_explosion():
                 print("Playing sound")
                 cauldron.play_sound(CauldronSounds(int(user)))
             elif user == "r":
-                print("Playing random voice")
-                cauldron.play_random_voice()
+                print("Playing demon voice")
+                cauldron.start_demon_voice()
             elif user == "h":
                 print("Enter: Explosion")
                 print("Integer: Sounds")

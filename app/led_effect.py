@@ -5,7 +5,9 @@ import numpy as np
 from numpy.random import choice
 from pydub import AudioSegment
 import random
+import sounddevice as sd
 import threading
+from typing import Callable
 
 
 TWO_PI = np.pi * 2
@@ -383,3 +385,31 @@ class AudioToBrightnessEffect(LedEffect):
     def reset(self):
         with self._lock:
             self._current_iteration = 0
+
+
+class BrightnessEffect(LedEffect):
+    """Changes the brightness of the LedStrip."""
+
+    def __init__(
+        self,
+        strip: LedStrip,
+        frame_speed_ms: int = 100,
+    ):
+        LedEffect.__init__(self, strip, frame_speed_ms)
+        self._lock = threading.Lock()
+        self._starting_brightness = self._strip.brightness
+        self._brightness_range = 1.0 - self._starting_brightness
+
+    def apply_effect(self):
+        """Applies a bubble to the LedStrip."""
+        self._strip.show()
+
+    def set_brightness(self, brightness: float):
+        with self._lock:
+            self._strip.brightness = self._starting_brightness + (
+                self._brightness_range * brightness
+            )
+
+    def reset(self):
+        with self._lock:
+            self._strip.brightness = self._starting_brightness

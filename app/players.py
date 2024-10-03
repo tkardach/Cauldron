@@ -1,14 +1,16 @@
 import abc
 from led_strip import LedStrip
-from led_effect import LedEffect
+from led_effect import LedEffect, BrightnessEffect
 import matplotlib.animation as animation
 import matplotlib.pyplot as plt
 import numpy as np
+from pedalboard.io import AudioStream
 from pydub import AudioSegment
 import simpleaudio as sa
+import sounddevice as sd
 import threading
 import time
-from typing import Callable
+from typing import Any, Callable
 
 
 def busy_sleep(seconds_to_sleep):
@@ -274,6 +276,67 @@ class AudioVisualPlayer(Player):
         self._audio_handle = None
 
 
+class RealtimeAudioPlayer(Player):
+    """Plays an AudioSegment."""
+
+    def __init__(self, effects: list[Any]):
+        Player.__init__(self)
+        self._effects = effects
+        self._stream = None
+
+    def _loop(self):
+        """Loops the audio segment until explicilty stopped."""
+        with self._condition:
+            with AudioStream(
+                input_device_name=AudioStream.default_input_device_name,
+                output_device_name=AudioStream.default_output_device_name,
+                buffer_size=1024,
+                sample_rate=44100,
+            ) as self._stream:
+                for effect in self._effects:
+                    self._stream.plugins.append(effect)
+                self._condition.wait_for(self._predicate)
+
+    def _play(self):
+        """Plays the audio segment."""
+        self._loop()
+
+    def stop(self, wait: bool = False):
+        """Stops the player if it is currently playing."""
+        Player.stop(self, wait)
+        self._stream = None
+
+
+class VoiceToBrightnessPlayer(Player):
+    """Plays both audio and LED visuals simultaneously."""
+
+    def __init__(self, effect: BrightnessEffect):
+        Player.__init__(self)
+        self._effect = effect
+
+    def _loop(self):
+        """Loops the audio and visual players."""
+
+        def change_brightness(indata, frames, time, status):
+            volume = np.linalg.norm(indata) * 10
+            self._effect.set_brightness(min(volume / 100, 1))
+
+        with self._condition:
+            with sd.InputStream(callback=change_brightness):
+                while self.is_playing():
+                    self._effect.apply_effect()
+                    busy_sleep(self._effect.frame_speed_ms / 1000.0)
+                self._condition.wait_for(self._predicate)
+
+    def _play(self):
+        """Plays the audio and visual players once."""
+        self._loop()
+
+    def stop(self, wait: bool = False):
+        """Stops the LedEffect."""
+        Player.stop(self, wait)
+
+
 class MockAudioVisualPlayer(AudioVisualPlayer):
     def __init__(
         self, effect_player: LedEffectPlayer, audio_player: AudioPlayer
@@ -356,6 +419,86 @@ class MockEffectPlayer(Player):
             frames=60,
             interval=self._effect.frame_speed_ms,
         )
+        plt.show()
+        return MockEffectHandle(self)
+
+    def _play(self):
+        self._loop()
+
+    def play(self):
+        return self._loop()
+
+    def loop(self):
+        return self._loop()
+
+    def stop(self):
+        return None
+
+
+class MockStripPlayer(Player):
+    def __init__(self, strip: LedStrip, frame_speed_ms: int = 100):
+        self._strip = strip
+        self._frame_speed_ms = frame_speed_ms
+
+    def _loop(self):
+        brightness_x_limit = 100
+        fig, ax = plt.subplots(nrows=3, ncols=2, figsize=(12, 6))
+        num_pixels = self._strip.num_pixels()
+        x = np.arange(0, num_pixels, 1)
+        y = [3] * num_pixels
+        scat_ax = ax[0, 0]
+        r_ax = ax[0, 1]
+        g_ax = ax[1, 1]
+        b_ax = ax[2, 1]
+        brightness_ax = ax[1, 0]
+        scat_ax.set(xlim=[0, num_pixels], ylim=[0, 6])
+        r_ax.set(xlim=[0, num_pixels], ylim=[0, 255])
+        r_ax.set_title("RGB channels")
+        g_ax.set(xlim=[0, num_pixels], ylim=[0, 255])
+        b_ax.set(xlim=[0, num_pixels], ylim=[0, 255])
+        brightness_ax.set(xlim=[0, brightness_x_limit], ylim=[0, 1.1])
+        # Create scatter plot to simulate LEDs
+        scat = scat_ax.scatter(x, y, s=50)
+        (r_plot,) = r_ax.plot(self._strip[:, 0])
+        (g_plot,) = g_ax.plot(self._strip[:, 1])
+        (b_plot,) = b_ax.plot(self._strip[:, 2])
+        brightness_values = []
+        (brightness_plot,) = brightness_ax.plot(brightness_values)
+        r_plot.set_color((1, 0, 0))
+        g_plot.set_color((0, 1, 0))
+        b_plot.set_color((0, 0, 1))
+
+        # Create set_pixels callback to change the LED scatter plot dot colors
+        def set_pixels(pixels: np.array):
+            brightness_values.append(self._strip.brightness)
+            while len(brightness_values) > brightness_x_limit:
+                brightness_values.pop(0)
+            scat.set_color(pixels / 255.0)
+            r_plot.set_ydata(pixels[:, 0])
+            g_plot.set_ydata(pixels[:, 1])
+            b_plot.set_ydata(pixels[:, 2])
+            brightness_plot.set_data(
+                np.arange(0, len(brightness_values), 1), brightness_values
+            )
+
+            fig.canvas.flush_events()
+
+        # Set the show callback to update the pixel colors. This will call
+        # set_pixels when LedStrip.show is called.
+        self._strip.set_show_callback(set_pixels)
+
+        # Create the pyplot animation update method. This will update the
+        # LedStrip pixels
+        def update(_):
+            return scat
+
+        ani = animation.FuncAnimation(
+            fig=fig,
+            func=update,
+            frames=60,
+            interval=self._frame_speed_ms,
+        )
+        plt.ion()
         plt.show()
         return MockEffectHandle(self)
 

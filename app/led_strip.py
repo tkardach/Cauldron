@@ -1,6 +1,7 @@
 import abc
 from enum import Enum
 import numpy as np
+import queue
 import socket
 import time
 from typing import Callable
@@ -122,6 +123,8 @@ class UdpStreamStrip(RgbArrayStrip):
 
 
 class MockStrip(RgbArrayStrip):
+    callback_queue = queue.Queue()
+
     def __init__(
         self, num_pixels: int, show_callback: Callable[[np.array], None] = None
     ):
@@ -135,5 +138,8 @@ class MockStrip(RgbArrayStrip):
         return self._pixels
 
     def show(self):
-        if self._show_callback:
+        def callback():
             self._show_callback(self._pixels)
+
+        if self._show_callback:
+            self.callback_queue.put(callback)

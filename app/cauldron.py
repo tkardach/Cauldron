@@ -5,6 +5,7 @@ import led_effect
 import led_strip
 import os
 import players
+from pedalboard import Reverb, PitchShift
 from pydub import AudioSegment
 from random import choice
 import threading
@@ -70,6 +71,16 @@ class ICauldron(abc.ABC):
         """Plays a random voice effect."""
         return None
 
+    @abc.abstractmethod
+    def start_demon_voice(self):
+        """Plays the demon voice in realtime."""
+        return None
+
+    @abc.abstractmethod
+    def stop_demon_voice(self):
+        """Stops the demon voice."""
+        return None
+
 
 class Cauldron(ICauldron):
     """Cauldron implementation."""
@@ -111,6 +122,13 @@ class Cauldron(ICauldron):
         self._demon_audio: list[players.AudioVisualPlayer] = None
         self._all_voices: list[players.AudioVisualPlayer] = None
         self._init_voice_effects()
+
+        # Inititalize realtime voice effects
+        self._rt_demon_voice_handle: players.Handle = None
+        self._rt_demon_voice_player: players.RealtimeAudioPlayer = None
+        self._rt_effect_handle: players.Handle = None
+        self._rt_effect_player: players.VoiceToBrightnessPlayer = None
+        self._init_realtime_voice_effects()
 
         # Start the common effect
         self.start()
@@ -158,6 +176,18 @@ class Cauldron(ICauldron):
         effect_player = players.LedEffectPlayer(a2b_effect)
         av_player = players.AudioVisualPlayer(effect_player, audio)
         return av_player
+
+    def _init_realtime_voice_effects(self):
+        """Initializes realtime voice effects."""
+        self._rt_demon_voice_player = players.RealtimeAudioPlayer(
+            [Reverb(), PitchShift(-4)]
+        )
+        brightness_effect = led_effect.BrightnessEffect(
+            self._strip, frame_speed_ms=33
+        )
+        self._rt_effect_player = players.VoiceToBrightnessPlayer(
+            brightness_effect
+        )
 
     def _init_voice_effects(self):
         """Initializes voice effects."""
@@ -264,3 +294,17 @@ class Cauldron(ICauldron):
                 self._voice_handle = self._demon_audio[2].play()
             case _:
                 return
+
+    def start_demon_voice(self):
+        """Plays the demon voice in realtime."""
+        self.stop_demon_voice()
+
+        self._rt_demon_voice_handle = self._rt_demon_voice_player.loop()
+        self._rt_effect_handle = self._rt_effect_player.loop()
+
+    def stop_demon_voice(self):
+        """Stops the demon voice."""
+        if self._rt_demon_voice_handle is not None:
+            self._rt_demon_voice_handle.stop_wait()
+        if self._rt_effect_handle is not None:
+            self._rt_effect_handle.stop_wait()
