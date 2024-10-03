@@ -67,7 +67,7 @@ class ICauldron(abc.ABC):
         return None
 
     @abc.abstractmethod
-    def play_sound(self, type: CauldronSounds):
+    def play_sound(self, sound: CauldronSounds):
         """Plays a random voice effect."""
         return None
 
@@ -271,11 +271,11 @@ class Cauldron(ICauldron):
             self._voice_handle.stop_wait()
         self._voice_handle = choice(self._all_voices).play()
 
-    def play_sound(self, type: CauldronSounds = CauldronSounds.NONE):
+    def play_sound(self, sound: CauldronSounds = CauldronSounds.NONE):
         """Plays a sound using the given sound type."""
         if self._voice_handle is not None:
             self._voice_handle.stop_wait()
-        match type:
+        match sound:
             case CauldronSounds.RANDOM_WITCH:
                 self._voice_handle = choice(self._witch_audio).play()
             case CauldronSounds.WITCH_LAUGH0:
