@@ -97,7 +97,7 @@ class Player(abc.ABC):
 
     def _predicate(self):
         """Returns True when the player is done/should stop playing."""
-        return not self.is_playing()
+        return not self._is_playing
 
     @abc.abstractmethod
     def _play(self):
@@ -279,17 +279,24 @@ class AudioVisualPlayer(Player):
 class RealtimeAudioPlayer(Player):
     """Plays an AudioSegment."""
 
-    def __init__(self, effects: list[Any]):
+    def __init__(
+        self,
+        effects: list[Any],
+        input_device: str = AudioStream.default_input_device_name,
+        output_device: str = AudioStream.default_output_device_name,
+    ):
         Player.__init__(self)
         self._effects = effects
         self._stream = None
+        self._input_device = input_device
+        self._output_device = output_device
 
     def _loop(self):
         """Loops the audio segment until explicilty stopped."""
         with self._condition:
             with AudioStream(
-                input_device_name=AudioStream.default_input_device_name,
-                output_device_name=AudioStream.default_output_device_name,
+                input_device_name=self._input_device,
+                output_device_name=self._output_device,
                 buffer_size=1024,
                 sample_rate=44100,
             ) as self._stream:
@@ -305,36 +312,6 @@ class RealtimeAudioPlayer(Player):
         """Stops the player if it is currently playing."""
         Player.stop(self, wait)
         self._stream = None
-
-
-class VoiceToBrightnessPlayer(Player):
-    """Plays both audio and LED visuals simultaneously."""
-
-    def __init__(self, effect: BrightnessEffect):
-        Player.__init__(self)
-        self._effect = effect
-
-    def _loop(self):
-        """Loops the audio and visual players."""
-
-        def change_brightness(indata, frames, time, status):
-            volume = np.linalg.norm(indata) * 10
-            self._effect.set_brightness(min(volume / 100, 1))
-
-        with self._condition:
-            with sd.InputStream(callback=change_brightness):
-                while self.is_playing():
-                    self._effect.apply_effect()
-                    busy_sleep(self._effect.frame_speed_ms / 1000.0)
-                self._condition.wait_for(self._predicate)
-
-    def _play(self):
-        """Plays the audio and visual players once."""
-        self._loop()
-
-    def stop(self, wait: bool = False):
-        """Stops the LedEffect."""
-        Player.stop(self, wait)
 
 
 class MockAudioVisualPlayer(AudioVisualPlayer):

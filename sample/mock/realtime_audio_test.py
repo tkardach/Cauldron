@@ -1,6 +1,7 @@
 import led_effect
 import led_strip
-from pedalboard import Reverb, PitchShift
+from pedalboard import Reverb, PitchShift, Delay
+from pedalboard.io import AudioStream
 import players
 import time
 from test_runner import TestRunner
@@ -15,10 +16,12 @@ mock_strip = led_strip.MockStrip(NUM_PIXELS)
 mock_strip.fill([100, 200, 55])
 mock_strip.brightness = 0.25
 
-brightness_effect = led_effect.BrightnessEffect(mock_strip)
-v2b_player = players.VoiceToBrightnessPlayer(brightness_effect)
-effect_player = players.MockStripPlayer(mock_strip)
-v2b_handle = v2b_player.loop()
-effect_handle = effect_player.loop()
-runner = TestRunner(mock_strip, [v2b_handle, effect_handle])
+print(AudioStream.input_device_names)
+print(AudioStream.output_device_names)
+
+rt_demon_voice_player = players.RealtimeAudioPlayer(
+    [Reverb(), PitchShift(-4)], input_device="Built-in Microphone"
+)
+v2b_handle = rt_demon_voice_player.loop()
+runner = TestRunner(mock_strip, [v2b_handle])
 runner.run()

@@ -1,11 +1,11 @@
 import abc
 from enum import Enum
-from typing import Tuple
 import led_effect
 import led_strip
 import os
 import players
 from pedalboard import Reverb, PitchShift
+from pedalboard.io import AudioStream
 from pydub import AudioSegment
 from random import choice
 import threading
@@ -77,7 +77,12 @@ class ICauldron(abc.ABC):
         return None
 
     @abc.abstractmethod
-    def stop_demon_voice(self):
+    def start_witch_voice(self):
+        """Plays the demon voice in realtime."""
+        return None
+
+    @abc.abstractmethod
+    def stop_active_voice(self):
         """Stops the demon voice."""
         return None
 
@@ -101,7 +106,7 @@ class Cauldron(ICauldron):
 
         # Initialize color possibilities
         self._colors = _CAULDRON_COLORS
-        self._current_color_index = 0
+        self._current_color_index = 1
         self._current_colors = self._colors[self._current_color_index]
 
         # Initialize bubbling effects players
@@ -124,10 +129,9 @@ class Cauldron(ICauldron):
         self._init_voice_effects()
 
         # Inititalize realtime voice effects
-        self._rt_demon_voice_handle: players.Handle = None
+        self._rt_voice_handle: players.Handle = None
         self._rt_demon_voice_player: players.RealtimeAudioPlayer = None
-        self._rt_effect_handle: players.Handle = None
-        self._rt_effect_player: players.VoiceToBrightnessPlayer = None
+        self._rt_witch_voice_player: players.RealtimeAudioPlayer = None
         self._init_realtime_voice_effects()
 
         # Start the common effect
@@ -157,6 +161,12 @@ class Cauldron(ICauldron):
         if self._bubbling_audio_handle:
             self._bubbling_audio_handle.stop_wait()
             self._bubbling_audio_handle = None
+        if self._voice_handle:
+            self._voice_handle.stop_wait()
+            self._voice_handle = None
+        if self._rt_voice_handle:
+            self._rt_voice_handle.stop_wait()
+            self._rt_voice_handle = None
 
     def is_playing(self):
         return (
@@ -180,13 +190,12 @@ class Cauldron(ICauldron):
     def _init_realtime_voice_effects(self):
         """Initializes realtime voice effects."""
         self._rt_demon_voice_player = players.RealtimeAudioPlayer(
-            [Reverb(), PitchShift(-4)]
+            [Reverb(), PitchShift(-4)],
+            input_device=AudioStream.input_device_names[0],
         )
-        brightness_effect = led_effect.BrightnessEffect(
-            self._strip, frame_speed_ms=33
-        )
-        self._rt_effect_player = players.VoiceToBrightnessPlayer(
-            brightness_effect
+        self._rt_witch_voice_player = players.RealtimeAudioPlayer(
+            [Reverb(), PitchShift(3)],
+            input_device=AudioStream.input_device_names[0],
         )
 
     def _init_voice_effects(self):
@@ -262,8 +271,8 @@ class Cauldron(ICauldron):
         """Causing an explosion will change the color and strobe the lights."""
         if self._explosion_handle is not None:
             self._explosion_handle.stop_wait()
-        self._set_random_colors()
         self._explosion_handle = self._explosion_player.play()
+        self._set_random_colors()
 
     def play_random_voice(self):
         """Plays a random voice."""
@@ -297,14 +306,64 @@ class Cauldron(ICauldron):
 
     def start_demon_voice(self):
         """Plays the demon voice in realtime."""
-        self.stop_demon_voice()
+        self.stop_active_voice()
 
-        self._rt_demon_voice_handle = self._rt_demon_voice_player.loop()
-        self._rt_effect_handle = self._rt_effect_player.loop()
+        self._rt_voice_handle = self._rt_demon_voice_player.loop()
 
-    def stop_demon_voice(self):
+    def start_witch_voice(self):
+        self.stop_active_voice()
+
+        self._rt_voice_handle = self._rt_witch_voice_player.loop()
+
+    def stop_active_voice(self):
         """Stops the demon voice."""
-        if self._rt_demon_voice_handle is not None:
-            self._rt_demon_voice_handle.stop_wait()
-        if self._rt_effect_handle is not None:
-            self._rt_effect_handle.stop_wait()
+        if self._rt_voice_handle is not None:
+            self._rt_voice_handle.stop_wait()
+
+
+_HELP_STRING: str = """
+e:   Explosion
+d:   Start/Stop Demon Voice
+w:   Start/Stop Witch Voice
+1-8: Play spooky voices
+q: exit
+
+Input: 
+"""
+
+
+class CauldronRunner:
+    def __init__(self, strip: led_strip.LedStrip):
+        self._strip = strip
+
+    def _run(self):
+        cauldron = Cauldron(self._strip)
+        try:
+            while True:
+                user = input(_HELP_STRING)
+                if user == "e":
+                    print("Causing explosion")
+                    cauldron.cause_explosion()
+                elif user.isdigit():
+                    print("Playing sound")
+                    cauldron.play_sound(CauldronSounds(int(user)))
+                elif user == "w":
+                    cauldron.stop_active_voice()
+                    print("Playing witch voice")
+                    cauldron.start_witch_voice()
+                elif user == "d":
+                    cauldron.stop_active_voice()
+                    print("Playing demon voice")
+                    cauldron.start_demon_voice()
+                elif user == "s":
+                    cauldron.stop_active_voice()
+                elif user == "q":
+                    del cauldron
+                    return
+        except:
+            del cauldron
+
+    def run(self):
+        t = threading.Thread(target=self._run)
+        t.start()
+        t.join()
