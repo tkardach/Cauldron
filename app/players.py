@@ -1,4 +1,5 @@
 import abc
+import logging
 from led_strip import LedStrip
 from led_effect import LedEffect, BrightnessEffect
 import matplotlib.animation as animation
@@ -14,6 +15,7 @@ from typing import Any, Callable
 
 
 def busy_sleep(seconds_to_sleep):
+    """Busy sleep guarantees more precise timing when sleeping."""
     start = time.time()
     while time.time() < start + seconds_to_sleep:
         pass
@@ -37,17 +39,17 @@ class Handle(abc.ABC):
         """Returns true if the handled player is playing."""
         return self._player.is_playing()
 
-    def wait_done(self):
+    def wait_done(self) -> None:
         """Waits for the handled player to finish playing."""
         self._player.wait_done()
 
-    def stop(self):
+    def stop(self) -> None:
         """Stops the handled player if it is playing."""
         with self._lock:
             self._player.stop()
             self._done_handling = True
 
-    def stop_wait(self):
+    def stop_wait(self) -> None:
         """Stops the handled player and waits until finished."""
         with self._lock:
             self._player.stop(True)
@@ -58,22 +60,22 @@ class Player(abc.ABC):
     """A Player asynchronously plays/loops an action on another thread."""
 
     def __init__(self):
-        self._handle = None
-        self._is_playing = False
+        self._handle: Handle | None = None
+        self._is_playing: bool = False
         self._thread_lock = threading.Lock()
         self._handle_lock = threading.Lock()
         self._condition = threading.Condition()
-        self._thread = None
+        self._thread: threading.Thread | None = None
 
     def __del__(self):
         self.stop_wait()
 
-    def is_playing(self):
+    def is_playing(self) -> bool:
         """Returns True if the player is currently playing."""
         with self._thread_lock:
             return self._is_playing
 
-    def wait_done(self):
+    def wait_done(self) -> None:
         """Waits for the running thread to finish executing."""
         with self._thread_lock:
             if self._thread is not None:
@@ -95,7 +97,7 @@ class Player(abc.ABC):
             self._handle = Handle(self)
         return self._handle
 
-    def _predicate(self):
+    def _predicate(self) -> bool:
         """Returns True when the player is done/should stop playing."""
         return not self._is_playing
 
@@ -120,7 +122,7 @@ class Player(abc.ABC):
         return self._create_thread(self._loop)
 
     @abc.abstractmethod
-    def stop(self, wait: bool = False):
+    def stop(self, wait: bool = False) -> None:
         """Stop playing/looping."""
         if not self.is_playing():
             return
@@ -137,7 +139,7 @@ class Player(abc.ABC):
                     self._thread.join()
                     self._thread = None
 
-    def stop_wait(self):
+    def stop_wait(self) -> None:
         self.stop(True)
 
 
@@ -145,30 +147,38 @@ class LedEffectPlayer(Player):
     """Plays an LedEffect on an LedStrip."""
 
     def __init__(self, effect: LedEffect):
-        Player.__init__(self)
+        super().__init__()
         self._effect = effect
-        self._play_time_s = None
+        self._play_time_s: float | None = None
 
     def _loop(self):
         """Loop thread function to loop LedEffect."""
         while self._is_playing:
-            self._effect.apply_effect()
+            try:
+                self._effect.apply_effect()
+            except Exception as e:
+                logging.exception("Error applying LED effect: %s", e)
+                break
             busy_sleep(self._effect.frame_speed_ms / 1000.0)
 
     def _play(self):
         """Play thread function to play LedEffect."""
         end_time = time.time() + self._play_time_s
         while self._is_playing and time.time() < end_time:
-            self._effect.apply_effect()
+            try:
+                self._effect.apply_effect()
+            except Exception as e:
+                logging.exception("Error applying LED effect: %s", e)
+                break
             busy_sleep(self._effect.frame_speed_ms / 1000.0)
 
     def play_for(self, time_s: float = 5.0) -> Handle:
         """Plays the LedEffect for time_s seconds."""
         assert time_s > 0
         self._play_time_s = time_s
-        return Player.play(self)
+        return super().play()
 
-    def play(self):
+    def play(self) -> Handle:
         """Plays the LedEffect for 5 seconds."""
         self._effect.reset()
         return self.play_for()
@@ -178,21 +188,21 @@ class LedEffectPlayer(Player):
         self._effect.reset()
         return self._create_thread(self._loop)
 
-    def stop(self, wait: bool = False):
+    def stop(self, wait: bool = False) -> None:
         """Stops the LedEffect."""
-        Player.stop(self, wait)
+        super().stop(wait)
 
 
 class AudioPlayer(Player):
     """Plays an AudioSegment."""
 
     def __init__(self, seg: AudioSegment):
-        Player.__init__(self)
+        super().__init__()
         self._sound = seg
         self._play_buffer = None
         self._duration_seconds = seg.duration_seconds
 
-    def _create_play_buffer(self, seg) -> sa.PlayObject:
+    def _create_play_buffer(self, seg: AudioSegment) -> sa.PlayObject:
         """Creates an audio buffer which can be played."""
         return sa.play_buffer(
             seg.raw_data,
@@ -202,15 +212,22 @@ class AudioPlayer(Player):
         )
 
     def _loop(self):
-        """Loops the audio segment until explicilty stopped."""
+        """Loops the audio segment until explicitly stopped."""
         while self._is_playing:
-            self._play_buffer = self._create_play_buffer(self._sound * 10)
-            self._play_buffer.wait_done()
+            try:
+                self._play_buffer = self._create_play_buffer(self._sound * 10)
+                self._play_buffer.wait_done()
+            except Exception as e:
+                logging.exception("Error during audio loop: %s", e)
+                break
 
     def _play(self):
         """Plays the audio segment."""
-        self._play_buffer = self._create_play_buffer(self._sound)
-        self._play_buffer.wait_done()
+        try:
+            self._play_buffer = self._create_play_buffer(self._sound)
+            self._play_buffer.wait_done()
+        except Exception as e:
+            logging.exception("Error during audio play: %s", e)
         with self._condition:
             self._is_playing = False
             self._condition.notify_all()
@@ -219,11 +236,14 @@ class AudioPlayer(Player):
         """Returns the duration of the audio segment in seconds."""
         return self._duration_seconds
 
-    def stop(self, wait: bool = False):
+    def stop(self, wait: bool = False) -> None:
         """Stops the player if it is currently playing."""
         if self._play_buffer:
-            self._play_buffer.stop()
-        Player.stop(self, wait)
+            try:
+                self._play_buffer.stop()
+            except Exception as e:
+                logging.warning("Error stopping audio buffer: %s", e)
+        super().stop(wait)
 
 
 class AudioVisualPlayer(Player):
@@ -232,14 +252,14 @@ class AudioVisualPlayer(Player):
     def __init__(
         self, effect_player: LedEffectPlayer, audio_player: AudioPlayer
     ):
-        Player.__init__(self)
+        super().__init__()
         self._effect_player = effect_player
         self._audio_player = audio_player
         self._playing = False
         self._effect_handle = None
         self._audio_handle = None
 
-    def _predicate(self):
+    def _predicate(self) -> bool:
         """Returns True if both audio and visual players are done playing."""
         return not (
             self._audio_handle.is_playing() or self._effect_handle.is_playing()
@@ -248,36 +268,48 @@ class AudioVisualPlayer(Player):
     def _loop(self):
         """Loops the audio and visual players."""
         with self._condition:
-            self._audio_handle = self._audio_player.loop()
-            self._effect_handle = self._effect_player.loop()
-            self._condition.wait_for(self._predicate)
+            try:
+                self._audio_handle = self._audio_player.loop()
+                self._effect_handle = self._effect_player.loop()
+                self._condition.wait_for(self._predicate)
+            except Exception as e:
+                logging.exception("Error in AudioVisualPlayer loop: %s", e)
 
     def _play(self):
         """Plays the audio and visual players once."""
         with self._condition:
-            self._audio_handle = self._audio_player.play()
-            self._effect_handle = self._effect_player.play_for(
-                self._audio_player.duration_seconds()
-            )
-            self._condition.wait_for(self._predicate)
+            try:
+                self._audio_handle = self._audio_player.play()
+                self._effect_handle = self._effect_player.play_for(
+                    self._audio_player.duration_seconds()
+                )
+                self._condition.wait_for(self._predicate)
+            except Exception as e:
+                logging.exception("Error in AudioVisualPlayer play: %s", e)
 
-    def stop(self, wait: bool = False):
+    def stop(self, wait: bool = False) -> None:
         """Stops the player if it is currently playing."""
         if self._handle is None:
             return None
         if self._effect_handle is not None:
-            self._effect_handle.stop_wait()
+            try:
+                self._effect_handle.stop_wait()
+            except Exception as e:
+                logging.warning("Error stopping effect handle: %s", e)
 
         if self._audio_handle is not None:
-            self._audio_handle.stop_wait()
+            try:
+                self._audio_handle.stop_wait()
+            except Exception as e:
+                logging.warning("Error stopping audio handle: %s", e)
 
-        Player.stop(self, wait)
+        super().stop(wait)
         self._effect_handle = None
         self._audio_handle = None
 
 
 class RealtimeAudioPlayer(Player):
-    """Plays an AudioSegment."""
+    """Plays an AudioSegment in real time with effects."""
 
     def __init__(
         self,
@@ -285,40 +317,47 @@ class RealtimeAudioPlayer(Player):
         input_device: str = AudioStream.default_input_device_name,
         output_device: str = AudioStream.default_output_device_name,
     ):
-        Player.__init__(self)
+        super().__init__()
         self._effects = effects
         self._stream = None
         self._input_device = input_device
         self._output_device = output_device
 
     def _loop(self):
-        """Loops the audio segment until explicilty stopped."""
+        """Loops the audio segment until explicitly stopped."""
         with self._condition:
-            with AudioStream(
-                input_device_name=self._input_device,
-                output_device_name=self._output_device,
-                buffer_size=1024,
-                sample_rate=44100,
-            ) as self._stream:
-                for effect in self._effects:
-                    self._stream.plugins.append(effect)
-                self._condition.wait_for(self._predicate)
+            try:
+                with AudioStream(
+                    input_device_name=self._input_device,
+                    output_device_name=self._output_device,
+                    buffer_size=1024,
+                    sample_rate=44100,
+                ) as self._stream:
+                    for effect in self._effects:
+                        self._stream.plugins.append(effect)
+                    self._condition.wait_for(self._predicate)
+            except Exception as e:
+                logging.exception("Error in RealtimeAudioPlayer loop: %s", e)
 
     def _play(self):
         """Plays the audio segment."""
         self._loop()
 
-    def stop(self, wait: bool = False):
+    def stop(self, wait: bool = False) -> None:
         """Stops the player if it is currently playing."""
-        Player.stop(self, wait)
+        super().stop(wait)
         self._stream = None
+
+
+# MOCK CLASSES
+# Consider moving these to a separate mock_players.py for better modularity.
 
 
 class MockAudioVisualPlayer(AudioVisualPlayer):
     def __init__(
         self, effect_player: LedEffectPlayer, audio_player: AudioPlayer
     ):
-        AudioVisualPlayer.__init__(self, effect_player, audio_player)
+        super().__init__(effect_player, audio_player)
 
     def play(self):
         self._play()
@@ -332,75 +371,76 @@ class MockEffectHandle(Handle):
         return None
 
 
+def _plot_led_strip(strip, effect, frame_speed_ms: int):
+    """Helper for plotting LED strip and effect animation (used by mocks)."""
+    brightness_x_limit = 100
+    fig, ax = plt.subplots(nrows=3, ncols=2, figsize=(12, 6))
+    num_pixels = strip.num_pixels()
+    x = np.arange(0, num_pixels, 1)
+    y = [3] * num_pixels
+    scat_ax = ax[0, 0]
+    r_ax = ax[0, 1]
+    g_ax = ax[1, 1]
+    b_ax = ax[2, 1]
+    brightness_ax = ax[1, 0]
+    scat_ax.set(xlim=[0, num_pixels], ylim=[0, 6])
+    r_ax.set(xlim=[0, num_pixels], ylim=[0, 255])
+    r_ax.set_title("RGB channels")
+    g_ax.set(xlim=[0, num_pixels], ylim=[0, 255])
+    b_ax.set(xlim=[0, num_pixels], ylim=[0, 255])
+    brightness_ax.set(xlim=[0, brightness_x_limit], ylim=[0, 1.1])
+    scat = scat_ax.scatter(x, y, s=50)
+    (r_plot,) = r_ax.plot(strip[:, 0])
+    (g_plot,) = g_ax.plot(strip[:, 1])
+    (b_plot,) = b_ax.plot(strip[:, 2])
+    brightness_values = []
+    (brightness_plot,) = brightness_ax.plot(brightness_values)
+    r_plot.set_color((1, 0, 0))
+    g_plot.set_color((0, 1, 0))
+    b_plot.set_color((0, 0, 1))
+
+    def set_pixels(pixels: np.array):
+        brightness_values.append(strip.brightness)
+        while len(brightness_values) > brightness_x_limit:
+            brightness_values.pop(0)
+        scat.set_color(pixels / 255.0)
+        r_plot.set_ydata(pixels[:, 0])
+        g_plot.set_ydata(pixels[:, 1])
+        b_plot.set_ydata(pixels[:, 2])
+        brightness_plot.set_data(
+            np.arange(0, len(brightness_values), 1), brightness_values
+        )
+        fig.canvas.flush_events()
+
+    strip.set_show_callback(set_pixels)
+
+    def update(_):
+        effect.apply_effect()
+        return scat
+
+    ani = animation.FuncAnimation(
+        fig=fig,
+        func=update,
+        frames=60,
+        interval=frame_speed_ms,
+    )
+    plt.show()
+    return MockEffectHandle(effect)
+
+
 class MockEffectPlayer(Player):
     def __init__(self, strip: LedStrip, effect: LedEffect):
+        super().__init__()
         self._strip = strip
         self._effect = effect
 
     def _loop(self):
-        brightness_x_limit = 100
-        fig, ax = plt.subplots(nrows=3, ncols=2, figsize=(12, 6))
-        num_pixels = self._strip.num_pixels()
-        x = np.arange(0, num_pixels, 1)
-        y = [3] * num_pixels
-        scat_ax = ax[0, 0]
-        r_ax = ax[0, 1]
-        g_ax = ax[1, 1]
-        b_ax = ax[2, 1]
-        brightness_ax = ax[1, 0]
-        scat_ax.set(xlim=[0, num_pixels], ylim=[0, 6])
-        r_ax.set(xlim=[0, num_pixels], ylim=[0, 255])
-        r_ax.set_title("RGB channels")
-        g_ax.set(xlim=[0, num_pixels], ylim=[0, 255])
-        b_ax.set(xlim=[0, num_pixels], ylim=[0, 255])
-        brightness_ax.set(xlim=[0, brightness_x_limit], ylim=[0, 1.1])
-        # Create scatter plot to simulate LEDs
-        scat = scat_ax.scatter(x, y, s=50)
-        (r_plot,) = r_ax.plot(self._strip[:, 0])
-        (g_plot,) = g_ax.plot(self._strip[:, 1])
-        (b_plot,) = b_ax.plot(self._strip[:, 2])
-        brightness_values = []
-        (brightness_plot,) = brightness_ax.plot(brightness_values)
-        r_plot.set_color((1, 0, 0))
-        g_plot.set_color((0, 1, 0))
-        b_plot.set_color((0, 0, 1))
-
-        # Create set_pixels callback to change the LED scatter plot dot colors
-        def set_pixels(pixels: np.array):
-            brightness_values.append(self._strip.brightness)
-            while len(brightness_values) > brightness_x_limit:
-                brightness_values.pop(0)
-            scat.set_color(pixels / 255.0)
-            r_plot.set_ydata(pixels[:, 0])
-            g_plot.set_ydata(pixels[:, 1])
-            b_plot.set_ydata(pixels[:, 2])
-            brightness_plot.set_data(
-                np.arange(0, len(brightness_values), 1), brightness_values
-            )
-
-            fig.canvas.flush_events()
-
-        # Set the show callback to update the pixel colors. This will call
-        # set_pixels when LedStrip.show is called.
-        self._strip.set_show_callback(set_pixels)
-
-        # Create the pyplot animation update method. This will update the
-        # LedStrip pixels
-        def update(_):
-            self._effect.apply_effect()
-            return scat
-
-        ani = animation.FuncAnimation(
-            fig=fig,
-            func=update,
-            frames=60,
-            interval=self._effect.frame_speed_ms,
+        return _plot_led_strip(
+            self._strip, self._effect, self._effect.frame_speed_ms
         )
-        plt.show()
-        return MockEffectHandle(self)
 
     def _play(self):
-        self._loop()
+        return self._loop()
 
     def play(self):
         return self._loop()
@@ -414,73 +454,17 @@ class MockEffectPlayer(Player):
 
 class MockStripPlayer(Player):
     def __init__(self, strip: LedStrip, frame_speed_ms: int = 100):
+        super().__init__()
         self._strip = strip
         self._frame_speed_ms = frame_speed_ms
 
     def _loop(self):
-        brightness_x_limit = 100
-        fig, ax = plt.subplots(nrows=3, ncols=2, figsize=(12, 6))
-        num_pixels = self._strip.num_pixels()
-        x = np.arange(0, num_pixels, 1)
-        y = [3] * num_pixels
-        scat_ax = ax[0, 0]
-        r_ax = ax[0, 1]
-        g_ax = ax[1, 1]
-        b_ax = ax[2, 1]
-        brightness_ax = ax[1, 0]
-        scat_ax.set(xlim=[0, num_pixels], ylim=[0, 6])
-        r_ax.set(xlim=[0, num_pixels], ylim=[0, 255])
-        r_ax.set_title("RGB channels")
-        g_ax.set(xlim=[0, num_pixels], ylim=[0, 255])
-        b_ax.set(xlim=[0, num_pixels], ylim=[0, 255])
-        brightness_ax.set(xlim=[0, brightness_x_limit], ylim=[0, 1.1])
-        # Create scatter plot to simulate LEDs
-        scat = scat_ax.scatter(x, y, s=50)
-        (r_plot,) = r_ax.plot(self._strip[:, 0])
-        (g_plot,) = g_ax.plot(self._strip[:, 1])
-        (b_plot,) = b_ax.plot(self._strip[:, 2])
-        brightness_values = []
-        (brightness_plot,) = brightness_ax.plot(brightness_values)
-        r_plot.set_color((1, 0, 0))
-        g_plot.set_color((0, 1, 0))
-        b_plot.set_color((0, 0, 1))
-
-        # Create set_pixels callback to change the LED scatter plot dot colors
-        def set_pixels(pixels: np.array):
-            brightness_values.append(self._strip.brightness)
-            while len(brightness_values) > brightness_x_limit:
-                brightness_values.pop(0)
-            scat.set_color(pixels / 255.0)
-            r_plot.set_ydata(pixels[:, 0])
-            g_plot.set_ydata(pixels[:, 1])
-            b_plot.set_ydata(pixels[:, 2])
-            brightness_plot.set_data(
-                np.arange(0, len(brightness_values), 1), brightness_values
-            )
-
-            fig.canvas.flush_events()
-
-        # Set the show callback to update the pixel colors. This will call
-        # set_pixels when LedStrip.show is called.
-        self._strip.set_show_callback(set_pixels)
-
-        # Create the pyplot animation update method. This will update the
-        # LedStrip pixels
-        def update(_):
-            return scat
-
-        ani = animation.FuncAnimation(
-            fig=fig,
-            func=update,
-            frames=60,
-            interval=self._frame_speed_ms,
+        return _plot_led_strip(
+            self._strip, BrightnessEffect(self._strip), self._frame_speed_ms
         )
-        plt.ion()
-        plt.show()
-        return MockEffectHandle(self)
 
     def _play(self):
-        self._loop()
+        return self._loop()
 
     def play(self):
         return self._loop()
