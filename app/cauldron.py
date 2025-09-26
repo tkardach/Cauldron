@@ -9,24 +9,8 @@ from pedalboard.io import AudioStream
 from pydub import AudioSegment
 from random import choice
 import threading
-
-
-_AUDIO_BUBBLING = "bubbles.wav"
-_AUDIO_DEMON = ["evie.wav", "porter.wav", "creepy_laugh0.wav"]
-_AUDIO_EXPLOSION = "poof.wav"
-_AUDIO_WITCH = ["witch0.wav", "witch1.wav", "witch_closer.wav"]
-_AUDIO_PATH = "app/files/audio/"
-_BUBBLE_LENGTHS = [7, 9, 11]
-_BUBBLE_POP_SPEEDS = [3000, 4000, 5000]
-_BUBBLE_PROB_WEIGHTS = [0.5, 0.25, 0.25]
-_BUBBLE_SPAWN_PROB = 0.05
-_CAULDRON_COLORS = [
-    ([32, 139, 25], [215, 232, 23]),
-    ([142, 75, 166], [237, 114, 178]),
-    ([255, 179, 0], [255, 0, 60]),
-    ([235, 57, 21], [76, 172, 194]),
-]
-_MAX_BUBBLES = 10
+import logging
+import config
 
 
 class CauldronSounds(Enum):
@@ -45,67 +29,75 @@ class ICauldron(abc.ABC):
     """Interface to control the Cauldron."""
 
     @abc.abstractmethod
-    def start(self):
+    def start(self) -> None:
+        """Start the cauldron effects."""
         pass
 
     @abc.abstractmethod
-    def stop(self):
+    def stop(self) -> None:
+        """Stop all cauldron effects."""
         pass
 
     @abc.abstractmethod
-    def is_playing(self):
+    def is_playing(self) -> bool:
+        """Check if the cauldron is currently playing any effects."""
         pass
 
     @abc.abstractmethod
-    def cause_explosion(self):
+    def cause_explosion(self) -> None:
         """Causes the Cauldron to explode, changing the color."""
-        return None
+        pass
 
     @abc.abstractmethod
-    def play_random_voice(self):
+    def play_random_voice(self) -> None:
         """Plays a random voice effect."""
-        return None
+        pass
 
     @abc.abstractmethod
-    def play_sound(self, sound: CauldronSounds):
-        """Plays a random voice effect."""
-        return None
+    def play_sound(self, sound: CauldronSounds) -> None:
+        """Plays a sound using the given sound type."""
+        pass
 
     @abc.abstractmethod
-    def start_demon_voice(self):
+    def start_demon_voice(self) -> None:
         """Plays the demon voice in realtime."""
-        return None
+        pass
 
     @abc.abstractmethod
-    def start_witch_voice(self):
-        """Plays the demon voice in realtime."""
-        return None
+    def start_witch_voice(self) -> None:
+        """Plays the witch voice in realtime."""
+        pass
 
     @abc.abstractmethod
-    def stop_active_voice(self):
-        """Stops the demon voice."""
-        return None
+    def stop_active_voice(self) -> None:
+        """Stops the active realtime voice."""
+        pass
 
 
 class Cauldron(ICauldron):
     """Cauldron implementation."""
 
     def __init__(self, strip: led_strip.LedStrip):
+        """Initialize the Cauldron with a given LED strip."""
         self._lock = threading.Lock()
         self._strip = strip
 
         # Initialize audio paths
-        self._bubbling_wav = os.path.join(_AUDIO_PATH, _AUDIO_BUBBLING)
-        self._explosion_wav = os.path.join(_AUDIO_PATH, _AUDIO_EXPLOSION)
-        self._witch_wavs = []
-        for wav in _AUDIO_WITCH:
-            self._witch_wavs.append(os.path.join(_AUDIO_PATH, wav))
-        self._demon_wavs = []
-        for wav in _AUDIO_DEMON:
-            self._demon_wavs.append(os.path.join(_AUDIO_PATH, wav))
+        self._bubbling_wav = os.path.join(
+            config.AUDIO_PATH, config.AUDIO_BUBBLING
+        )
+        self._explosion_wav = os.path.join(
+            config.AUDIO_PATH, config.AUDIO_EXPLOSION
+        )
+        self._witch_wavs = [
+            os.path.join(config.AUDIO_PATH, wav) for wav in config.AUDIO_WITCH
+        ]
+        self._demon_wavs = [
+            os.path.join(config.AUDIO_PATH, wav) for wav in config.AUDIO_DEMON
+        ]
 
         # Initialize color possibilities
-        self._colors = _CAULDRON_COLORS
+        self._colors = config.CAULDRON_COLORS
         self._current_color_index = 1
         self._current_colors = self._colors[self._current_color_index]
 
@@ -141,6 +133,7 @@ class Cauldron(ICauldron):
         self.stop()
 
     def start(self):
+        """Start the cauldron effects."""
         if (
             self._bubbling_audio_handle is not None
             or self._bubbling_handle is not None
@@ -150,6 +143,7 @@ class Cauldron(ICauldron):
         self._start_common_effect()
 
     def stop(self):
+        """Stop all cauldron effects."""
         self._strip.fill((0, 0, 0))
         self._strip.show()
         if self._explosion_handle:
@@ -169,19 +163,20 @@ class Cauldron(ICauldron):
             self._rt_voice_handle = None
 
     def is_playing(self):
+        """Check if the cauldron is currently playing any effects."""
         return (
             self._bubbling_audio_handle.is_playing()
             and self._bubbling_handle.is_playing()
         )
 
     def _create_a2b_av_effect(
-        self, audio_segment
+        self, audio_segment: AudioSegment
     ) -> players.AudioVisualPlayer:
         """Creates an AudioVisualPlayer using an AudioToBrightness effect."""
         audio = players.AudioPlayer(audio_segment)
 
         a2b_effect = led_effect.AudioToBrightnessEffect(
-            self._strip, audio_segment, frame_speed_ms=33
+            self._strip, audio_segment, frame_speed_ms=config.FRAME_SPEED_MS
         )
         effect_player = players.LedEffectPlayer(a2b_effect)
         av_player = players.AudioVisualPlayer(effect_player, audio)
@@ -200,15 +195,18 @@ class Cauldron(ICauldron):
 
     def _init_voice_effects(self):
         """Initializes voice effects."""
-        self._witch_audio = [
-            self._create_a2b_av_effect(AudioSegment.from_file(wav))
-            for wav in self._witch_wavs
-        ]
-        self._demon_audio = [
-            self._create_a2b_av_effect(AudioSegment.from_file(wav))
-            for wav in self._demon_wavs
-        ]
+        self._witch_audio = self._init_audio_list(self._witch_wavs)
+        self._demon_audio = self._init_audio_list(self._demon_wavs)
         self._all_voices = self._witch_audio + self._demon_audio
+
+    def _init_audio_list(
+        self, wav_list: list[str]
+    ) -> list[players.AudioVisualPlayer]:
+        """Helper to create AudioVisualPlayers from a list of wav files."""
+        return [
+            self._create_a2b_av_effect(AudioSegment.from_file(wav))
+            for wav in wav_list
+        ]
 
     def _init_explosion_effects(self):
         """Initializes the cauldron's explosion effects."""
@@ -225,13 +223,13 @@ class Cauldron(ICauldron):
                 self._strip,
                 colors[0],
                 colors[1],
-                _BUBBLE_LENGTHS,
-                _BUBBLE_PROB_WEIGHTS,
-                _BUBBLE_POP_SPEEDS,
-                _BUBBLE_PROB_WEIGHTS,
-                _MAX_BUBBLES,
-                _BUBBLE_SPAWN_PROB,
-                frame_speed_ms=33,
+                config.BUBBLE_LENGTHS,
+                config.BUBBLE_PROB_WEIGHTS,
+                config.BUBBLE_POP_SPEEDS,
+                config.BUBBLE_PROB_WEIGHTS,
+                config.MAX_BUBBLES,
+                config.BUBBLE_SPAWN_PROB,
+                frame_speed_ms=config.FRAME_SPEED_MS,
             )
             bubbling_effect_player = players.LedEffectPlayer(bubbling_effect)
             self._bubbling_effects.append(bubbling_effect_player)
@@ -311,12 +309,13 @@ class Cauldron(ICauldron):
         self._rt_voice_handle = self._rt_demon_voice_player.loop()
 
     def start_witch_voice(self):
+        """Plays the witch voice in realtime."""
         self.stop_active_voice()
 
         self._rt_voice_handle = self._rt_witch_voice_player.loop()
 
     def stop_active_voice(self):
-        """Stops the demon voice."""
+        """Stops the active realtime voice."""
         if self._rt_voice_handle is not None:
             self._rt_voice_handle.stop_wait()
 
@@ -335,35 +334,56 @@ Input:
 class CauldronRunner:
     def __init__(self, strip: led_strip.LedStrip):
         self._strip = strip
+        self._command_map = {
+            "e": self._explosion,
+            "w": self._witch_voice,
+            "d": self._demon_voice,
+            "s": self._stop_voice,
+            "q": self._quit,
+        }
+        self._running = True
+
+    def _explosion(self, cauldron):
+        logging.info("Causing explosion")
+        cauldron.cause_explosion()
+
+    def _witch_voice(self, cauldron):
+        cauldron.stop_active_voice()
+        logging.info("Playing witch voice")
+        cauldron.start_witch_voice()
+
+    def _demon_voice(self, cauldron):
+        cauldron.stop_active_voice()
+        logging.info("Playing demon voice")
+        cauldron.start_demon_voice()
+
+    def _stop_voice(self, cauldron):
+        cauldron.stop_active_voice()
+        logging.info("Stopped active voice")
+
+    def _quit(self, cauldron):
+        self._running = False
+        del cauldron
+        logging.info("Exiting CauldronRunner")
 
     def _run(self):
         cauldron = Cauldron(self._strip)
         try:
-            while True:
-                user = input(_HELP_STRING)
-                if user == "e":
-                    print("Causing explosion")
-                    cauldron.cause_explosion()
-                elif user.isdigit():
-                    print("Playing sound")
+            while self._running:
+                user = input(_HELP_STRING).strip()
+                if user.isdigit():
+                    logging.info(f"Playing sound {user}")
                     cauldron.play_sound(CauldronSounds(int(user)))
-                elif user == "w":
-                    cauldron.stop_active_voice()
-                    print("Playing witch voice")
-                    cauldron.start_witch_voice()
-                elif user == "d":
-                    cauldron.stop_active_voice()
-                    print("Playing demon voice")
-                    cauldron.start_demon_voice()
-                elif user == "s":
-                    cauldron.stop_active_voice()
-                elif user == "q":
-                    del cauldron
-                    return
-        except:
+                elif user in self._command_map:
+                    self._command_map[user](cauldron)
+                else:
+                    logging.warning(f"Unknown command: {user}")
+        except Exception as e:
+            logging.exception("Error in CauldronRunner: %s", e)
             del cauldron
 
     def run(self):
+        """Run the CauldronRunner in a separate thread."""
         t = threading.Thread(target=self._run)
         t.start()
         t.join()
