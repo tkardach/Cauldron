@@ -89,11 +89,10 @@ class Cauldron(ICauldron):
         self._explosion_wav = os.path.join(
             config.AUDIO_PATH, config.AUDIO_EXPLOSION
         )
-        self._witch_wavs = [
-            os.path.join(config.AUDIO_PATH, wav) for wav in config.AUDIO_WITCH
-        ]
-        self._demon_wavs = [
-            os.path.join(config.AUDIO_PATH, wav) for wav in config.AUDIO_DEMON
+        # Pool all soundbites into a single list from config.AUDIO_SOUNDBITES
+        self._soundbite_wavs = [
+            os.path.join(config.AUDIO_PATH, wav)
+            for wav in config.AUDIO_SOUNDBITES
         ]
 
         # Initialize color possibilities
@@ -115,9 +114,7 @@ class Cauldron(ICauldron):
 
         # Initialize voice audio effects
         self._voice_handle: players.Handle = None
-        self._witch_audio: list[players.AudioVisualPlayer] = None
-        self._demon_audio: list[players.AudioVisualPlayer] = None
-        self._all_voices: list[players.AudioVisualPlayer] = None
+        self._soundbite_audio: list[players.AudioVisualPlayer] = None
         self._init_voice_effects()
 
         # Inititalize realtime voice effects
@@ -194,10 +191,8 @@ class Cauldron(ICauldron):
         )
 
     def _init_voice_effects(self):
-        """Initializes voice effects."""
-        self._witch_audio = self._init_audio_list(self._witch_wavs)
-        self._demon_audio = self._init_audio_list(self._demon_wavs)
-        self._all_voices = self._witch_audio + self._demon_audio
+        """Initializes soundbite effects."""
+        self._soundbite_audio = self._init_audio_list(self._soundbite_wavs)
 
     def _init_audio_list(
         self, wav_list: list[str]
@@ -273,34 +268,21 @@ class Cauldron(ICauldron):
         self._set_random_colors()
 
     def play_random_voice(self):
-        """Plays a random voice."""
+        """Plays a random soundbite."""
         if self._voice_handle is not None:
             self._voice_handle.stop_wait()
-        self._voice_handle = choice(self._all_voices).play()
+        self._voice_handle = choice(self._soundbite_audio).play()
 
     def play_sound(self, sound: CauldronSounds = CauldronSounds.NONE):
-        """Plays a sound using the given sound type."""
+        """Plays a soundbite by index, if valid."""
         if self._voice_handle is not None:
             self._voice_handle.stop_wait()
-        match sound:
-            case CauldronSounds.RANDOM_WITCH:
-                self._voice_handle = choice(self._witch_audio).play()
-            case CauldronSounds.WITCH_LAUGH0:
-                self._voice_handle = self._witch_audio[0].play()
-            case CauldronSounds.WITCH_LAUGH1:
-                self._voice_handle = self._witch_audio[1].play()
-            case CauldronSounds.WITCH_LAUGH2:
-                self._voice_handle = self._witch_audio[2].play()
-            case CauldronSounds.RANDOM_DEMON:
-                self._voice_handle = choice(self._demon_audio).play()
-            case CauldronSounds.DEMON_EVIE:
-                self._voice_handle = self._demon_audio[0].play()
-            case CauldronSounds.DEMON_PORTER:
-                self._voice_handle = self._demon_audio[1].play()
-            case CauldronSounds.DEMON_LAUGH:
-                self._voice_handle = self._demon_audio[2].play()
-            case _:
-                return
+        # Play soundbite by index if valid
+        idx = sound.value - 1
+        if 0 <= idx < len(self._soundbite_audio):
+            self._voice_handle = self._soundbite_audio[idx].play()
+        else:
+            return
 
     def start_demon_voice(self):
         """Plays the demon voice in realtime."""
@@ -320,11 +302,11 @@ class Cauldron(ICauldron):
             self._rt_voice_handle.stop_wait()
 
 
-_HELP_STRING: str = """
+_HELP_STRING: str = f"""
 e:   Explosion
 d:   Start/Stop Demon Voice
 w:   Start/Stop Witch Voice
-1-8: Play spooky voices
+1-{len(config.AUDIO_SOUNDBITES)}: Play spooky sounds
 q: exit
 
 Input: 

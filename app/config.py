@@ -3,9 +3,21 @@ Configuration constants for the Cauldron project.
 """
 
 AUDIO_BUBBLING = "bubbles.wav"
-AUDIO_DEMON = ["evie.wav", "porter.wav", "creepy_laugh0.wav"]
+"""
+Configuration constants for the Cauldron project.
+"""
+
+AUDIO_BUBBLING = "bubbles.wav"
 AUDIO_EXPLOSION = "poof.wav"
-AUDIO_WITCH = ["witch0.wav", "witch1.wav", "witch_closer.wav"]
+AUDIO_SOUNDBITES = [
+    "witch0.wav",
+    "witch1.wav",
+    "witch_closer.wav",
+    "evie.wav",
+    "porter.wav",
+    "creepy_laugh0.wav",
+    "harry.wav",
+]
 AUDIO_PATH = "app/files/audio/"
 BUBBLE_LENGTHS = [7, 9, 11]
 BUBBLE_POP_SPEEDS = [3000, 4000, 5000]
