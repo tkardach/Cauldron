@@ -61,6 +61,6 @@ VOICES = {
         ],
     },
     "donald duck": {
-        "effects": [PitchShift(semitones=8), Distortion(drive_db=5)],
+        "effects": [PitchShift(semitones=7), Distortion(drive_db=5)],
     },
 }

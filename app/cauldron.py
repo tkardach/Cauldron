@@ -335,13 +335,14 @@ class CauldronRunner:
             "q": self._quit,
         }
         # Add voice commands dynamically
+        self._voice_key_map = {}
         for voice_name in config.VOICES.keys():
             key_length = 1
             while voice_name[0:key_length] in self._command_map:
                 key_length += 1
-            self._command_map[voice_name[0:key_length]] = self._make_voice_cmd(
-                voice_name
-            )
+            key = voice_name[0:key_length]
+            self._command_map[key] = self._make_voice_cmd(voice_name)
+            self._voice_key_map[key] = voice_name
         self._running = True
 
     def _make_voice_cmd(self, voice_name):
@@ -376,7 +377,7 @@ class CauldronRunner:
             + "\n"
             + "Voices: "
             + ", ".join(
-                [f"{name[0]}: {name}" for name in config.VOICES.keys()]
+                [f"{key}: {name}" for key, name in self._voice_key_map.items()]
             )
             + "\n"
         )
