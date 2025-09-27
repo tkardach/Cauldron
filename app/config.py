@@ -2,7 +2,7 @@
 Configuration constants for the Cauldron project.
 """
 
-from pedalboard import Reverb, PitchShift, Distortion
+from pedalboard import Reverb, PitchShift, Distortion, Compressor
 
 AUDIO_BUBBLING = "bubbles.wav"
 AUDIO_EXPLOSION = "poof.wav"
@@ -64,5 +64,8 @@ VOICES = {
     },
     "donald duck": {
         "effects": [PitchShift(semitones=7), Distortion(drive_db=5)],
+    },
+    "mickey mouse": {
+        "effects": [PitchShift(semitones=9), Compressor()],
     },
 }

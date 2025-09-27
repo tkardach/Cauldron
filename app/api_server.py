@@ -33,7 +33,7 @@ def health():
 def cauldron_effect_start():
     global cauldron
     if cauldron is None:
-        cauldron = Cauldron(strip)
+        cauldron = Cauldron(strip, INPUT, OUTPUT)
     cauldron.start()
     return jsonify({"result": "success"})
 
