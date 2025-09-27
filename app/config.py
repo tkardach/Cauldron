@@ -28,6 +28,8 @@ CAULDRON_COLORS = [
 ]
 MAX_BUBBLES = 10
 FRAME_SPEED_MS = 33
+CAULDRON_INPUT_DEVICE = "Built-in Microphone"
+CAULDRON_OUTPUT_DEVICE = "SRS-XB10"
 
 # Voice configuration: name -> effect chain
 VOICES = {

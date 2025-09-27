@@ -13,18 +13,6 @@ import logging
 import config
 
 
-class CauldronSounds(Enum):
-    NONE = 0
-    RANDOM_WITCH = 1
-    WITCH_LAUGH0 = 2
-    WITCH_LAUGH1 = 3
-    WITCH_LAUGH2 = 4
-    RANDOM_DEMON = 5
-    DEMON_EVIE = 6
-    DEMON_PORTER = 7
-    DEMON_LAUGH = 8
-
-
 class ICauldron(abc.ABC):
     """Interface to control the Cauldron."""
 
@@ -54,8 +42,12 @@ class ICauldron(abc.ABC):
         pass
 
     @abc.abstractmethod
-    def play_sound(self, sound: CauldronSounds) -> None:
-        """Plays a sound using the given sound type."""
+    def play_sound(self, sound: int | str) -> None:
+        """
+        Play a soundbite by index or name from config.AUDIO_SOUNDBITES.
+        Args:
+            sound: Index (int) or filename (str) from AUDIO_SOUNDBITES.
+        """
         pass
 
     @abc.abstractmethod
@@ -280,16 +272,26 @@ class Cauldron(ICauldron):
             self._voice_handle.stop_wait()
         self._voice_handle = choice(self._soundbite_audio).play()
 
-    def play_sound(self, sound: CauldronSounds = CauldronSounds.NONE):
-        """Plays a soundbite by index, if valid."""
+    def play_sound(self, sound: int | str = 0):
+        """
+        Play a soundbite by index or name from config.AUDIO_SOUNDBITES.
+        Args:
+            sound: Index (int) or filename (str) from AUDIO_SOUNDBITES.
+        """
         if self._voice_handle is not None:
             self._voice_handle.stop_wait()
-        # Play soundbite by index if valid
-        idx = sound.value - 1
-        if 0 <= idx < len(self._soundbite_audio):
+        idx = None
+        if isinstance(sound, int):
+            idx = sound
+        elif isinstance(sound, str):
+            if sound.isdigit():
+                idx = int(sound)
+            elif sound in config.AUDIO_SOUNDBITES:
+                idx = config.AUDIO_SOUNDBITES.index(sound)
+        if idx is not None and 0 <= idx < len(self._soundbite_audio):
             self._voice_handle = self._soundbite_audio[idx].play()
         else:
-            return
+            logging.warning(f"Invalid sound: {sound}")
 
     def start_voice(self, voice_name: str):
         """Plays the selected voice in realtime."""
@@ -386,10 +388,11 @@ class CauldronRunner:
                 user = input(help_string).strip()
                 if user.isdigit():
                     logging.info(f"Playing sound {user}")
-                    cauldron.play_sound(CauldronSounds(int(user)))
+                    cauldron.play_sound(int(user) - 1)
                 elif user in self._command_map:
                     self._command_map[user](cauldron)
                 else:
+                    cauldron.cause_explosion()
                     logging.warning(f"Unknown command: {user}")
         except Exception as e:
             logging.exception("Error in CauldronRunner: %s", e)
