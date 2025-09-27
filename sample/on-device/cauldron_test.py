@@ -10,5 +10,5 @@ strip.brightness = 0.2
 
 print(AudioStream.output_device_names, AudioStream.input_device_names)
 
-runner = CauldronRunner(strip)
+runner = CauldronRunner(strip, "Built-in Microphone", "SRS-XB10")
 runner.run()

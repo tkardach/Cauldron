@@ -59,13 +59,8 @@ class ICauldron(abc.ABC):
         pass
 
     @abc.abstractmethod
-    def start_demon_voice(self) -> None:
-        """Plays the demon voice in realtime."""
-        pass
-
-    @abc.abstractmethod
-    def start_witch_voice(self) -> None:
-        """Plays the witch voice in realtime."""
+    def start_voice(self, voice_name: str) -> None:
+        """Plays the voice in realtime."""
         pass
 
     @abc.abstractmethod
@@ -77,10 +72,23 @@ class ICauldron(abc.ABC):
 class Cauldron(ICauldron):
     """Cauldron implementation."""
 
-    def __init__(self, strip: led_strip.LedStrip):
-        """Initialize the Cauldron with a given LED strip."""
+    def __init__(
+        self,
+        strip: led_strip.LedStrip,
+        rt_input_device: str = None,
+        rt_output_device: str = None,
+    ):
+        """Initialize the Cauldron with a given LED strip and optional realtime audio devices."""
         self._lock = threading.Lock()
         self._strip = strip
+
+        # Store realtime audio device configuration
+        self._rt_input_device = (
+            rt_input_device or AudioStream.input_device_names[0]
+        )
+        self._rt_output_device = (
+            rt_output_device or AudioStream.output_device_names[0]
+        )
 
         # Initialize audio paths
         self._bubbling_wav = os.path.join(
@@ -119,8 +127,7 @@ class Cauldron(ICauldron):
 
         # Inititalize realtime voice effects
         self._rt_voice_handle: players.Handle = None
-        self._rt_demon_voice_player: players.RealtimeAudioPlayer = None
-        self._rt_witch_voice_player: players.RealtimeAudioPlayer = None
+        self._voice_players: dict[str, players.RealtimeAudioPlayer] = {}
         self._init_realtime_voice_effects()
 
         # Start the common effect
@@ -180,15 +187,15 @@ class Cauldron(ICauldron):
         return av_player
 
     def _init_realtime_voice_effects(self):
-        """Initializes realtime voice effects."""
-        self._rt_demon_voice_player = players.RealtimeAudioPlayer(
-            [Reverb(), PitchShift(-4)],
-            input_device=AudioStream.input_device_names[0],
-        )
-        self._rt_witch_voice_player = players.RealtimeAudioPlayer(
-            [Reverb(), PitchShift(3)],
-            input_device=AudioStream.input_device_names[0],
-        )
+        """Initializes realtime voice effects from config.VOICES using direct effect instances."""
+        self._voice_players = {}
+        for name, voice_cfg in config.VOICES.items():
+            effects = voice_cfg.get("effects", [])
+            self._voice_players[name] = players.RealtimeAudioPlayer(
+                effects,
+                input_device=self._rt_input_device,
+                output_device=self._rt_output_device,
+            )
 
     def _init_voice_effects(self):
         """Initializes soundbite effects."""
@@ -284,17 +291,16 @@ class Cauldron(ICauldron):
         else:
             return
 
-    def start_demon_voice(self):
-        """Plays the demon voice in realtime."""
+    def start_voice(self, voice_name: str):
+        """Plays the selected voice in realtime."""
         self.stop_active_voice()
-
-        self._rt_voice_handle = self._rt_demon_voice_player.loop()
-
-    def start_witch_voice(self):
-        """Plays the witch voice in realtime."""
-        self.stop_active_voice()
-
-        self._rt_voice_handle = self._rt_witch_voice_player.loop()
+        player = self._voice_players.get(voice_name)
+        if player:
+            self._rt_voice_handle = player.loop()
+        else:
+            logging.warning(
+                f"Voice '{voice_name}' not found in config.VOICES."
+            )
 
     def stop_active_voice(self):
         """Stops the active realtime voice."""
@@ -314,30 +320,41 @@ Input:
 
 
 class CauldronRunner:
-    def __init__(self, strip: led_strip.LedStrip):
+    def __init__(
+        self,
+        strip: led_strip.LedStrip,
+        rt_input_device: str = None,
+        rt_output_device: str = None,
+    ):
         self._strip = strip
+        self._rt_input_device = rt_input_device
+        self._rt_output_device = rt_output_device
         self._command_map = {
             "e": self._explosion,
-            "w": self._witch_voice,
-            "d": self._demon_voice,
             "s": self._stop_voice,
             "q": self._quit,
         }
+        # Add voice commands dynamically
+        for voice_name in config.VOICES.keys():
+            key_length = 1
+            while voice_name[0:key_length] in self._command_map:
+                key_length += 1
+            self._command_map[voice_name[0:key_length]] = self._make_voice_cmd(
+                voice_name
+            )
         self._running = True
+
+    def _make_voice_cmd(self, voice_name):
+        def cmd(cauldron):
+            cauldron.stop_active_voice()
+            logging.info(f"Playing {voice_name} voice")
+            cauldron.start_voice(voice_name)
+
+        return cmd
 
     def _explosion(self, cauldron):
         logging.info("Causing explosion")
         cauldron.cause_explosion()
-
-    def _witch_voice(self, cauldron):
-        cauldron.stop_active_voice()
-        logging.info("Playing witch voice")
-        cauldron.start_witch_voice()
-
-    def _demon_voice(self, cauldron):
-        cauldron.stop_active_voice()
-        logging.info("Playing demon voice")
-        cauldron.start_demon_voice()
 
     def _stop_voice(self, cauldron):
         cauldron.stop_active_voice()
@@ -349,10 +366,23 @@ class CauldronRunner:
         logging.info("Exiting CauldronRunner")
 
     def _run(self):
-        cauldron = Cauldron(self._strip)
+        cauldron = Cauldron(
+            self._strip,
+            rt_input_device=self._rt_input_device,
+            rt_output_device=self._rt_output_device,
+        )
+        help_string = (
+            _HELP_STRING
+            + "\n"
+            + "Voices: "
+            + ", ".join(
+                [f"{name[0]}: {name}" for name in config.VOICES.keys()]
+            )
+            + "\n"
+        )
         try:
             while self._running:
-                user = input(_HELP_STRING).strip()
+                user = input(help_string).strip()
                 if user.isdigit():
                     logging.info(f"Playing sound {user}")
                     cauldron.play_sound(CauldronSounds(int(user)))

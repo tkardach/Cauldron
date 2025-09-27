@@ -2,10 +2,7 @@
 Configuration constants for the Cauldron project.
 """
 
-AUDIO_BUBBLING = "bubbles.wav"
-"""
-Configuration constants for the Cauldron project.
-"""
+from pedalboard import Reverb, PitchShift, Distortion
 
 AUDIO_BUBBLING = "bubbles.wav"
 AUDIO_EXPLOSION = "poof.wav"
@@ -31,3 +28,39 @@ CAULDRON_COLORS = [
 ]
 MAX_BUBBLES = 10
 FRAME_SPEED_MS = 33
+
+# Voice configuration: name -> effect chain
+VOICES = {
+    "demon": {
+        "effects": [
+            Reverb(),
+            PitchShift(-4),
+        ],
+    },
+    "witch": {
+        "effects": [
+            Reverb(),
+            PitchShift(3),
+        ],
+    },
+    "robot": {
+        "effects": [
+            Reverb(),
+            PitchShift(3),
+        ],
+    },
+    "alien": {
+        "effects": [
+            Reverb(),
+            PitchShift(-12),
+        ],
+    },
+    "chipmunk": {
+        "effects": [
+            PitchShift(8),
+        ],
+    },
+    "donald duck": {
+        "effects": [PitchShift(semitones=8), Distortion(drive_db=5)],
+    },
+}

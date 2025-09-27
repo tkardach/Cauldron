@@ -1,14 +1,13 @@
 import led_effect
 import led_strip
-from pedalboard import Reverb, PitchShift, Delay
+from pedalboard import Reverb, PitchShift, LowpassFilter
 from pedalboard.io import AudioStream
 import players
 import time
 from test_runner import TestRunner
 
 fx = [
-    Reverb(wet_level=1),
-    PitchShift(semitones=-4),
+    PitchShift(semitones=8),
 ]
 NUM_PIXELS = 50
 
@@ -20,7 +19,9 @@ print(AudioStream.input_device_names)
 print(AudioStream.output_device_names)
 
 rt_demon_voice_player = players.RealtimeAudioPlayer(
-    [Reverb(), PitchShift(-4)], input_device="Built-in Microphone"
+    fx,
+    input_device="Built-in Microphone",
+    output_device="SRS-XB10",
 )
 v2b_handle = rt_demon_voice_player.loop()
 runner = TestRunner(mock_strip, [v2b_handle])
