@@ -15,7 +15,7 @@ AUDIO_SOUNDBITES = [
     "creepy_laugh0.wav",
     "harry.wav",
 ]
-AUDIO_PATH = "app/files/audio/"
+AUDIO_PATH = "cauldron/assets/audio/"
 BUBBLE_LENGTHS = [7, 9, 11]
 BUBBLE_POP_SPEEDS = [3000, 4000, 5000]
 BUBBLE_PROB_WEIGHTS = [0.5, 0.25, 0.25]

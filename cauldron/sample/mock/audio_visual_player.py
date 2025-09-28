@@ -10,7 +10,9 @@ NUM_PIXELS = 50
 
 def play_bubble_effect():
     # Initialize the AudioPlayer
-    segment = AudioSegment.from_file("app/files/audio/bubbles.wav")
+    import cauldron.assets.audio as audio_assets
+
+    segment = AudioSegment.from_file(audio_assets.get_path("bubbles.wav"))
     segment.frame_rate = int(segment.frame_rate / 4)
     audio_player = players.AudioPlayer(segment)
 
@@ -50,7 +52,7 @@ def play_bubble_effect():
 
 
 def play_a2b_effect():
-    segment = AudioSegment.from_file("app/files/audio/poof.wav")
+    segment = AudioSegment.from_file(audio_assets.get_path("poof.wav"))
     segment = segment.set_sample_width(2)
     color0 = [32, 139, 25]
 

@@ -85,7 +85,9 @@ def test_bubbling_effect():
 
 
 def test_a2b_effect():
-    segment = AudioSegment.from_file("app/files/audio/poof.wav")
+    import cauldron.assets.audio as audio_assets
+
+    segment = AudioSegment.from_file(audio_assets.get_path("poof.wav"))
     color0 = [32, 139, 25]
 
     mock_strip = led_strip.MockStrip(NUM_PIXELS)
