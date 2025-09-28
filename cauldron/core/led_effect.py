@@ -7,6 +7,8 @@ from pydub import AudioSegment
 import random
 import threading
 
+import threading
+
 
 TWO_PI = np.pi * 2
 
@@ -15,6 +17,9 @@ class LedEffect(abc.ABC):
     def __init__(self, strip: LedStrip, frame_speed_ms: int = 100):
         self._frame_speed_ms = frame_speed_ms
         self._strip = strip
+
+    # Effect chain classes are now available for chaining effects:
+    #   TimedEffect, TransitionEffect, RepeatingEffectChain
 
     @property
     def frame_speed_ms(self) -> int:
