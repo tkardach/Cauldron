@@ -1,21 +1,15 @@
 import abc
-import os
 from pedalboard.io import AudioStream
 from pydub import AudioSegment
 from random import choice
 import threading
 import logging
+import numpy as np
 
 import cauldron.config.config as config
 import cauldron.core.led_effect as led_effect
 import cauldron.core.led_strip as led_strip
 import cauldron.core.players as players
-import numpy as np
-from cauldron.core.effect_chain import (
-    TimedEffect,
-    ColorPairTransitionEffect,
-    RepeatingEffectChain,
-)
 
 
 class ICauldron(abc.ABC):
@@ -217,68 +211,34 @@ class Cauldron(ICauldron):
         def random_color():
             return np.random.randint(0, 256, size=3).tolist()
 
-        def make_bubbling_effect(strip, color0, color1):
-            return led_effect.BubblingEffect(
-                strip,
-                color0,
-                color1,
-                config.BUBBLE_LENGTHS,
-                config.BUBBLE_PROB_WEIGHTS,
-                config.BUBBLE_POP_SPEEDS,
-                config.BUBBLE_PROB_WEIGHTS,
-                config.MAX_BUBBLES,
-                config.BUBBLE_SPAWN_PROB,
-                frame_speed_ms=config.FRAME_SPEED_MS,
-            )
-
         # Initial random colors
         color0 = random_color()
         color1 = random_color()
         self._current_bubbling_colors = (color0, color1)
 
-        def make_effect_chain():
-            bubbling = make_bubbling_effect(
-                self._strip, *self._current_bubbling_colors
-            )
-
-            # After 2 minutes, transition to new random colors
-            def transition_action():
-                new_color0 = random_color()
-                new_color1 = random_color()
-                self._current_bubbling_colors = (new_color0, new_color1)
-
-            timed_bubbling = TimedEffect(
-                lambda strip: make_bubbling_effect(
-                    strip, *self._current_bubbling_colors
-                ),
-                self._strip,
-                time_s=120,
-            )
-            # Transition between color pairs
-            transition = ColorPairTransitionEffect(
-                self._strip,
-                start_colors=self._current_bubbling_colors,
-                end_colors=(random_color(), random_color()),
-                transition_time_ms=5000,
-            )
-            # Attach a callback to update bubbling colors after transition
-            orig_apply = transition.apply_effect
-
-            def wrapped_apply():
-                orig_apply()
-                if transition.is_done():
-                    # Set new bubbling colors to the transition's end colors
-                    self._current_bubbling_colors = (
-                        transition._end_colors[0].astype(int).tolist(),
-                        transition._end_colors[1].astype(int).tolist(),
-                    )
-
-            transition.apply_effect = wrapped_apply
-            return RepeatingEffectChain(timed_bubbling, transition)
-
-        self._current_bubbling_effect = players.LedEffectPlayer(
-            make_effect_chain()
+        bubbling_effect = led_effect.BubblingEffect(
+            self._strip,
+            [color0, color1],
+            config.BUBBLE_LENGTHS,
+            config.BUBBLE_PROB_WEIGHTS,
+            config.BUBBLE_POP_SPEEDS,
+            config.BUBBLE_PROB_WEIGHTS,
+            config.MAX_BUBBLES,
+            config.BUBBLE_SPAWN_PROB,
+            frame_speed_ms=config.FRAME_SPEED_MS,
         )
+
+        effect_chain = led_effect.RepeatingEffectChain(
+            led_effect.Duration(
+                led_effect.TransitionColors(
+                    random_colors=True,
+                ),
+                seconds=5,
+            ),
+            led_effect.Duration(bubbling_effect, seconds=120),
+        )
+
+        self._current_bubbling_effect = players.LedEffectPlayer(effect_chain)
 
         segment = AudioSegment.from_file(self._bubbling_wav)
         segment.frame_rate = int(segment.frame_rate / 4)
