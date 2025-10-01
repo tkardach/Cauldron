@@ -1,7 +1,7 @@
 import abc
 import logging
 from cauldron.core.led_strip import LedStrip
-from cauldron.core.led_effect import LedEffect, BrightnessEffect
+from cauldron.core.led_effect import LedEffect, BrightnessEffect, Duration
 import matplotlib.animation as animation
 import matplotlib.pyplot as plt
 import numpy as np
@@ -190,6 +190,66 @@ class LedEffectPlayer(Player):
 
     def stop(self, wait: bool = False) -> None:
         """Stops the LedEffect."""
+        super().stop(wait)
+
+
+class RepeatedEffectChainPlayer(Player):
+    """
+    Plays a sequence of LedEffects in order, passing output colors from one effect to the next.
+    When the end of the chain is reached, loops back to the start, using the last effect's output as the input for the first.
+    """
+
+    def __init__(self, *effects_with_duration: Duration):
+        """
+        effects_with_duration: list of led_effect.Duration objects
+        """
+        super().__init__()
+        assert len(effects_with_duration) > 0
+        self._effects = effects_with_duration
+        self._current_index = 0
+        self._current_effect = effects_with_duration[
+            self._current_index
+        ].effect
+        self._next_end_time = (
+            time.time() + self._effects[self._current_index].seconds
+        )
+
+    def _run_iteration(self):
+        now = time.time()
+        if now >= self._next_end_time:
+            prev_index = self._current_index
+            # Move to the next effect in the chain
+            self._current_index = (self._current_index + 1) % len(
+                self._effects
+            )
+            self._current_effect = self._effects[self._current_index].effect
+            # Set the input colors of the new effect to the output colors of the previous effect
+            self._current_effect.input_colors = self._effects[
+                prev_index
+            ].effect.output_colors
+            self._current_effect.reset()
+            # Set the end time for the new effect
+            self._next_end_time = (
+                now + self._effects[self._current_index].end_time()
+            )
+        try:
+            self._current_effect.apply_effect()
+        except Exception as e:
+            logging.exception("Error applying LED effect: %s", e)
+        busy_sleep(self._effect.frame_speed_ms / 1000.0)
+
+    def _loop(self):
+        """Loop through the chain of effects indefinitely."""
+        while self._is_playing:
+            self._run_iteration()
+
+    def _play(self):
+        """Play thread function to play LedEffect."""
+        end_time = time.time() + self._play_time_s
+        while self._is_playing and time.time() < end_time:
+            self._run_iteration()
+
+    def stop(self, wait: bool = False) -> None:
         super().stop(wait)
 
 

@@ -48,6 +48,11 @@ class LedStrip(abc.ABC):
     def num_pixels(self) -> int:
         return 0
 
+    @abc.abstractmethod
+    def get_pixels(self) -> np.ndarray:
+        """Returns the current pixel data as a numpy array."""
+        pass
+
     def show(self):
         return None
 
@@ -133,8 +138,8 @@ class MockStrip(RgbArrayStrip):
     def set_show_callback(self, show_callback: Callable[[np.array], None]):
         self._show_callback = show_callback
 
-    def get_pixels(self):
-        return self._pixels
+    def get_pixels(self, pixel_order: PixelOrder = PixelOrder.RGB):
+        return super().get_pixels(pixel_order)
 
     def show(self):
         def callback():

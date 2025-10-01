@@ -97,7 +97,8 @@ class Cauldron(ICauldron):
         self._current_colors = self._colors[self._current_color_index]
 
         # Initialize bubbling effects players
-        self._current_bubbling_effect: players.LedEffectPlayer = None
+        self._bubbling_effect: players.LedEffect = None
+        self._bubbling_player: players.RepeatedEffectChainPlayer = None
         self._bubbling_handle: players.Handle = None
         self._bubbling_audio_player: players.AudioPlayer = None
         self._bubbling_audio_handle: players.Handle = None
@@ -132,7 +133,7 @@ class Cauldron(ICauldron):
         ):
             return
         self._bubbling_audio_handle = self._bubbling_audio_player.loop()
-        self._start_common_effect()
+        self._bubbling_handle = self._bubbling_player.loop()
 
     def stop(self):
         """Stop all cauldron effects."""
@@ -216,7 +217,7 @@ class Cauldron(ICauldron):
         color1 = random_color()
         self._current_bubbling_colors = (color0, color1)
 
-        bubbling_effect = led_effect.BubblingEffect(
+        self._bubbling_effect = led_effect.BubblingEffect(
             self._strip,
             [color0, color1],
             config.BUBBLE_LENGTHS,
@@ -228,17 +229,11 @@ class Cauldron(ICauldron):
             frame_speed_ms=config.FRAME_SPEED_MS,
         )
 
-        effect_chain = led_effect.RepeatingEffectChain(
-            led_effect.Duration(
-                led_effect.TransitionColors(
-                    random_colors=True,
-                ),
-                seconds=5,
-            ),
-            led_effect.Duration(bubbling_effect, seconds=120),
+        # Use the new RepeatedEffectChainPlayer with Duration objects
+        self._bubbling_player = players.RepeatedEffectChainPlayer(
+            led_effect.Duration(led_effect.RandomColorTransition(2, 2), 5),
+            led_effect.Duration(self._bubbling_effect, 120),
         )
-
-        self._current_bubbling_effect = players.LedEffectPlayer(effect_chain)
 
         segment = AudioSegment.from_file(self._bubbling_wav)
         segment.frame_rate = int(segment.frame_rate / 4)
@@ -255,18 +250,7 @@ class Cauldron(ICauldron):
                 ]
             )
             self._current_colors = self._colors[self._current_color_index]
-            self._current_bubbling_effect = self._bubbling_effects[
-                self._current_color_index
-            ]
-        self._start_common_effect()
-
-    def _start_common_effect(self):
-        """Starts the looping cauldron bubbling effect."""
-        if self._bubbling_handle is not None:
-            self._bubbling_handle.stop_wait()
-        with self._lock:
-            self._strip.fill(self._current_colors[0])
-            self._bubbling_handle = self._current_bubbling_effect.loop()
+            self._bubbling_effect.input_colors = self._current_colors
 
     def cause_explosion(self):
         """Causing an explosion will change the color and strobe the lights."""
