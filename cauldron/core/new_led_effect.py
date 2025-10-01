@@ -207,12 +207,12 @@ class BubblingEffect(LedEffect):
         self,
         strip: LedStrip,
         colors: list,
-        bubble_lengths: list,
-        bubble_length_weights: list,
-        bubble_pop_speeds: list,
-        bubble_pop_speed_weights: list,
-        max_bubbles: int,
-        bubble_spawn_prob: float,
+        bubble_lengths: list = [5, 7, 9],
+        bubble_length_weights: list = [0.5, 0.25, 0.25],
+        bubble_pop_speeds: list = [3, 4, 5],
+        bubble_pop_speed_weights: list = [0.5, 0.25, 0.25],
+        max_bubbles: int = 10,
+        bubble_spawn_prob: float = 0.05,
     ):
         super().__init__(strip)
         assert (
@@ -240,7 +240,7 @@ class BubblingEffect(LedEffect):
         self._active_bubbles = [
             b
             for b in self._active_bubbles
-            if t - b["start_time"] < b["pop_speed"]
+            if t - b["start_time"] < 2 * b["pop_speed"]
         ]
 
         # Possibly spawn a new bubble
