@@ -71,18 +71,45 @@ class EffectChain(LedEffect):
         assert durations, "EffectChain requires at least one Duration."
         self._durations = durations
         self._total_time = sum(d.seconds for d in durations)
+        self._prev_output_colors = None
+        self._last_effect_color = None
+        self._last_active_idx = None  # Track last active effect index
 
     def update(self, t: float):
         # t is time in seconds since animation start
         t_mod = t % self._total_time
         elapsed = 0.0
-        for duration in self._durations:
+        active_idx = None
+        for idx, duration in enumerate(self._durations):
             if t_mod < elapsed + duration.seconds:
+                active_idx = idx
+                # Before running, set input_colors from previous effect's output_colors (unless first)
+                if idx == 0:
+                    self._prev_output_colors = self._last_effect_color
+                if self._prev_output_colors is not None:
+                    duration.effect.input_colors = self._prev_output_colors
+                if duration.effect.input_colors:
+                    self._strip[:] = duration.effect.input_colors[0]
                 # Run the effect with time offset
-                self._strip[:] = duration.effect.input_colors[0]
                 duration.effect.update(t_mod - elapsed)
+                if idx == len(self._durations) - 1:
+                    self._last_effect_color = duration.effect.output_colors
                 break
+            self._prev_output_colors = duration.effect.output_colors
             elapsed += duration.seconds
+
+        # Only call reset() once per transition between durations
+        if active_idx is not None and self._last_active_idx is not None:
+            if active_idx != self._last_active_idx:
+                # If wrapping from last to first, also reset the last effect
+                if (
+                    active_idx == 0
+                    and self._last_active_idx == len(self._durations) - 1
+                ):
+                    self._durations[self._last_active_idx].effect.reset()
+                next_idx = (self._last_active_idx + 1) % len(self._durations)
+                self._durations[next_idx].effect.reset()
+        self._last_active_idx = active_idx
 
     @property
     def input_colors(self) -> list[np.ndarray]:
@@ -178,7 +205,10 @@ class TravelingLightEffect(LedEffect):
     @input_colors.setter
     def input_colors(self, colors: list):
         """Sets the input colors for the effect."""
-        self._colors = colors
+        for idx, color in enumerate(colors):
+            if idx >= len(self._colors):
+                break
+            self._colors[idx] = np.array(color, dtype=int)
 
     @property
     def output_colors(self) -> list[np.ndarray]:
@@ -298,6 +328,80 @@ class MultiLedEffect(LedEffect):
     def reset(self):
         for effect in self._effects:
             effect.reset()
+
+
+class TransitionEffect(LedEffect):
+    def __init__(
+        self,
+        strip: LedStrip,
+        target_colors: list = None,
+        duration: float = 2.0,
+        randomize: bool = False,
+        per_led_rates: list = None,
+    ):
+        """
+        Transition each LED from its current color to a target color over a duration.
+        Args:
+            strip: The LedStrip to apply the effect on.
+            target_colors: List of target colors (RGB tuples/arrays) for each LED, or a single color for all.
+            duration: Duration of the transition in seconds.
+            randomize: If True, target colors are random per LED.
+            per_led_rates: Optional list of rates (0-1) for each LED, controlling speed.
+        """
+        super().__init__(strip)
+        self._duration = duration
+        self._randomize = randomize
+        self._num_pixels = self._strip.num_pixels()
+        self._start_colors = None
+        self._target_colors = None
+        self._per_led_rates = (
+            per_led_rates
+            if per_led_rates is not None
+            else [1.0] * self._num_pixels
+        )
+        self._last_target = None
+        self._init_targets(target_colors)
+
+    def _init_targets(self, target_colors):
+        # Always capture current strip state as start colors
+        self._start_colors = np.array(self._strip.get_pixels(), dtype=float)
+        if self._randomize or target_colors is None:
+            # Single random RGB color for all LEDs
+            rand_color = np.random.randint(0, 256, 3)
+            self._target_colors = np.array(rand_color, dtype=float)
+        else:
+            # Single color for all LEDs
+            self._target_colors = np.array(target_colors, dtype=float)
+        self._last_target = self._target_colors.copy()
+
+    def update(self, t: float):
+        # t: seconds since transition started
+        if self._start_colors is None or self._target_colors is None:
+            self._init_targets(self._target_colors)
+        progress = np.clip(t / self._duration, 0.0, 1.0)
+        # Each LED can have its own rate
+        rates = np.array(self._per_led_rates)
+        led_progress = np.clip(progress * rates, 0.0, 1.0)
+        colors = (
+            1 - led_progress[:, None]
+        ) * self._start_colors + led_progress[:, None] * self._target_colors
+        self._strip[:] = colors.astype(int)
+
+    @property
+    def input_colors(self) -> list:
+        # Always ignore input_colors, return empty list
+        return []
+
+    @input_colors.setter
+    def input_colors(self, _: list):
+        pass
+
+    @property
+    def output_colors(self) -> list:
+        return [self._target_colors] if self._target_colors is not None else []
+
+    def reset(self):
+        self._init_targets(None)
 
 
 class BubblingEffect(LedEffect):

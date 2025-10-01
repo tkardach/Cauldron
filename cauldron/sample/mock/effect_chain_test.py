@@ -4,6 +4,7 @@ from cauldron.core.new_led_effect import (
     TravelingLightEffect,
     EffectChain,
     EffectWithDuration,
+    TransitionEffect,
 )
 
 # Make sure to import the corrected MockPlayer class
@@ -26,8 +27,14 @@ effect_b = TravelingLightEffect(
     reverse=True,
     start_index=49,
 )
+transition_effect = TransitionEffect(strip, randomize=True, duration=2)
 effect = EffectChain(
-    strip, [EffectWithDuration(effect_a, 5), EffectWithDuration(effect_b, 5)]
+    strip,
+    [
+        EffectWithDuration(effect_a, 1),
+        EffectWithDuration(effect_b, 1),
+        EffectWithDuration(transition_effect, 2),
+    ],
 )
 
 # 2. Create the player instance
