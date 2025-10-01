@@ -52,6 +52,65 @@ class LedEffect(abc.ABC):
         pass
 
 
+class EffectWithDuration:
+    """A container to associate an effect with a duration."""
+
+    def __init__(self, effect: LedEffect, seconds: float):
+        self.effect = effect
+        self.seconds = seconds
+
+
+class EffectChain(LedEffect):
+    """
+    Runs a sequence of effects for specified durations, looping the sequence.
+    Each element is a Duration(effect, seconds).
+    """
+
+    def __init__(self, strip: LedStrip, durations: list[EffectWithDuration]):
+        super().__init__(strip)
+        assert durations, "EffectChain requires at least one Duration."
+        self._durations = durations
+        self._total_time = sum(d.seconds for d in durations)
+
+    def update(self, t: float):
+        # t is time in seconds since animation start
+        t_mod = t % self._total_time
+        elapsed = 0.0
+        for duration in self._durations:
+            if t_mod < elapsed + duration.seconds:
+                # Run the effect with time offset
+                self._strip[:] = duration.effect.input_colors[0]
+                duration.effect.update(t_mod - elapsed)
+                break
+            elapsed += duration.seconds
+
+    @property
+    def input_colors(self) -> list[np.ndarray]:
+        # Return input colors of all effects
+        return [
+            color for d in self._durations for color in d.effect.input_colors
+        ]
+
+    @input_colors.setter
+    def input_colors(self, colors: list):
+        # Distribute colors to effects
+        idx = 0
+        for d in self._durations:
+            n = len(d.effect.input_colors)
+            d.effect.input_colors = colors[idx : idx + n]
+            idx += n
+
+    @property
+    def output_colors(self) -> list[np.ndarray]:
+        return [
+            color for d in self._durations for color in d.effect.output_colors
+        ]
+
+    def reset(self):
+        for d in self._durations:
+            d.effect.reset()
+
+
 class TravelingLightEffect(LedEffect):
     def __init__(
         self,
@@ -60,6 +119,8 @@ class TravelingLightEffect(LedEffect):
         tail_length: int = 10,
         rps: float = 1.0,
         fade_type: str = "exponential",  # 'exponential' or 'linear'
+        reverse: bool = False,
+        start_index: int = 0,
     ):
         """
         A traveling light with a fading tail using an exponential curve.
@@ -82,6 +143,8 @@ class TravelingLightEffect(LedEffect):
             "linear",
         ), "fade_type must be 'exponential' or 'linear'"
         self._fade_type = fade_type
+        self._direction = -1 if reverse else 1
+        self._start_index = start_index
 
     def update(self, t: float):
         n_leds = self._strip.num_pixels()
@@ -89,11 +152,12 @@ class TravelingLightEffect(LedEffect):
         head = np.array(self._colors[1], dtype=float)
 
         # Calculate head position (wraps around strip)
-        pos = (t * self._rps * n_leds) % n_leds
-        led_colors = np.tile(base, (n_leds, 1))
+        pos = (
+            self._start_index + self._direction * t * self._rps * n_leds
+        ) % n_leds
 
         for i in range(self._tail_length + 1):
-            led_idx = int((pos - i) % n_leds)
+            led_idx = int((pos - self._direction * i) % n_leds)
             if i == 0:
                 alpha = 1.0
             else:
@@ -104,9 +168,7 @@ class TravelingLightEffect(LedEffect):
                 else:
                     alpha = 0.0  # fallback
             color = (1 - alpha) * base + alpha * head
-            led_colors[led_idx] = color
-
-        self._strip[:] = led_colors.astype(int)
+            self._strip[led_idx] = color.astype(int)
 
     @property
     def input_colors(self) -> list[np.ndarray]:
@@ -200,6 +262,42 @@ class BubbleEffect(LedEffect):
 
     def reset(self):
         pass
+
+
+class MultiLedEffect(LedEffect):
+    def __init__(self, strip: LedStrip, effects: list[LedEffect]):
+        super().__init__(strip)
+        self._effects = effects
+
+    def update(self, t: float):
+        self._strip[:] = self.input_colors[0]
+        for effect in self._effects:
+            effect.update(t)
+
+    @property
+    def input_colors(self) -> list[np.ndarray]:
+        return [
+            color for effect in self._effects for color in effect.input_colors
+        ]
+
+    @input_colors.setter
+    def input_colors(self, colors: list):
+        # Distribute colors to effects if possible
+        idx = 0
+        for effect in self._effects:
+            n = len(effect.input_colors)
+            effect.input_colors = colors[idx : idx + n]
+            idx += n
+
+    @property
+    def output_colors(self) -> list[np.ndarray]:
+        return [
+            color for effect in self._effects for color in effect.output_colors
+        ]
+
+    def reset(self):
+        for effect in self._effects:
+            effect.reset()
 
 
 class BubblingEffect(LedEffect):

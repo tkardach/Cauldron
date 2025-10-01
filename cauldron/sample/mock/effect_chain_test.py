@@ -1,6 +1,10 @@
 import matplotlib.pyplot as plt
 from cauldron.core.led_strip import MockStrip
-from cauldron.core.new_led_effect import TravelingLightEffect, MultiLedEffect
+from cauldron.core.new_led_effect import (
+    TravelingLightEffect,
+    EffectChain,
+    EffectWithDuration,
+)
 
 # Make sure to import the corrected MockPlayer class
 from cauldron.core.new_players import MockEffectPlayer
@@ -22,7 +26,9 @@ effect_b = TravelingLightEffect(
     reverse=True,
     start_index=49,
 )
-effect = MultiLedEffect(strip, [effect_a, effect_b])
+effect = EffectChain(
+    strip, [EffectWithDuration(effect_a, 5), EffectWithDuration(effect_b, 5)]
+)
 
 # 2. Create the player instance
 player = MockEffectPlayer(strip, effect, fps=60.0)
