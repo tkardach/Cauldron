@@ -89,11 +89,6 @@ class Cauldron(ICauldron):
             audio_assets.get_path(wav) for wav in config.AUDIO_SOUNDBITES
         ]
 
-        # Initialize color possibilities
-        self._colors = config.CAULDRON_COLORS
-        self._current_color_index = 1
-        self._current_colors = self._colors[self._current_color_index]
-
         # Initialize bubbling effects players
         self._bubbling_player: players.LedEffectPlayer = None
         self._bubbling_handle: players.Handle = None
@@ -209,33 +204,32 @@ class Cauldron(ICauldron):
         def random_color():
             return np.random.randint(0, 256, size=3).tolist()
 
+        start_color = random_color()
+        self._strip.fill(start_color)
+        self._strip.show()
         bubbling_effect = led_effect.BubblingEffect(
-            self._strip,
-            [random_color(), random_color()],
-            config.BUBBLE_LENGTHS,
-            config.BUBBLE_PROB_WEIGHTS,
-            config.BUBBLE_POP_SPEEDS,
-            config.BUBBLE_PROB_WEIGHTS,
-            config.MAX_BUBBLES,
-            config.BUBBLE_SPAWN_PROB,
+            self._strip, [start_color, random_color()]
         )
         effect = led_effect.EffectChain(
             self._strip,
             [
                 led_effect.EffectWithDuration(bubbling_effect, 120),
                 led_effect.EffectWithDuration(
-                    led_effect.TransitionEffect(self._strip, randomize=True), 5
+                    led_effect.TransitionEffect(
+                        self._strip, randomize=True, duration=5
+                    ),
+                    5,
                 ),
                 led_effect.EffectWithDuration(
                     led_effect.TravelingLightEffect(
                         self._strip, [[0, 0, 0], [0, 256, 0]]
                     ),
-                    5,
+                    30,
                 ),
             ],
         )
         # Use the new RepeatedEffectChainPlayer with Duration objects
-        self._bubbling_player = players.LedEffectPlayer(effect)
+        self._bubbling_player = players.LedEffectPlayer(effect, 15)
 
         segment = AudioSegment.from_file(self._bubbling_wav)
         segment.frame_rate = int(segment.frame_rate / 4)

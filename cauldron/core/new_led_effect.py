@@ -20,6 +20,15 @@ class LedEffect(abc.ABC):
 
     def __init__(self, strip: LedStrip):
         self._strip = strip
+        self._internal_show_enabled = True
+
+    def show(self):
+        if self._internal_show_enabled:
+            self._strip.show()
+
+    def disable_internal_show(self):
+        """Disables internal show calls for this effect."""
+        self._internal_show_enabled = False
 
     @abc.abstractmethod
     def update(self, t: float):
@@ -112,6 +121,15 @@ class EffectChain(LedEffect):
                 next_idx = (self._last_active_idx + 1) % len(self._durations)
                 self._durations[next_idx].effect.reset()
         self._last_active_idx = active_idx
+        self.show()
+
+    def _disable_children_internal_show(self):
+        for d in self._durations:
+            d.effect.disable_internal_show()
+
+    def disable_internal_show(self):
+        self._internal_show_enabled = False
+        self._disable_children_internal_show()
 
     @property
     def input_colors(self) -> list[np.ndarray]:
@@ -198,6 +216,7 @@ class TravelingLightEffect(LedEffect):
                     alpha = 0.0  # fallback
             color = (1 - alpha) * base + alpha * head
             self._strip[led_idx] = color.astype(int)
+        self.show()
 
     @property
     def input_colors(self) -> list[np.ndarray]:
@@ -272,6 +291,7 @@ class BubbleEffect(LedEffect):
         ) * amplitude + base_color
         colors = np.clip(colors, 0, 255)
         self._strip[self._bubble_index : self._max_index] = colors.astype(int)
+        self.show()
 
     @property
     def input_colors(self) -> list[np.ndarray]:
@@ -305,6 +325,12 @@ class MultiLedEffect(LedEffect):
         self._strip[:] = self.input_colors[0]
         for effect in self._effects:
             effect.update(t)
+        self.show()
+
+    def disable_internal_show(self):
+        self._internal_show_enabled = False
+        for effect in self._effects:
+            effect.disable_internal_show()
 
     @property
     def input_colors(self) -> list[np.ndarray]:
@@ -388,6 +414,7 @@ class TransitionEffect(LedEffect):
             1 - led_progress[:, None]
         ) * self._start_colors + led_progress[:, None] * self._target_colors
         self._strip[:] = colors.astype(int)
+        self.show()
 
     @property
     def input_colors(self) -> list:
@@ -495,6 +522,12 @@ class BubblingEffect(LedEffect):
         for b in self._active_bubbles:
             bubble_t = t - b["start_time"]
             b["bubble"].update(bubble_t)
+        self.show()
+
+    def disable_internal_show(self):
+        self._internal_show_enabled = False
+        for b in self._active_bubbles:
+            b["bubble"].disable_internal_show()
 
     @property
     def input_colors(self) -> list[np.ndarray]:
@@ -551,8 +584,7 @@ class AudioToBrightnessEffect(LedEffect):
             1,
         )
         self._strip.brightness = brightness
-        self._strip.show()
-        self._last_t = t
+        self.show()
 
     @property
     def input_colors(self) -> list:
@@ -592,7 +624,7 @@ class BrightnessEffect(LedEffect):
         # t is ignored; brightness is set via input_colors
         with self._lock:
             self._strip.brightness = self._brightness
-        self._strip.show()
+        self.show()
 
     @property
     def input_colors(self) -> list:
