@@ -62,6 +62,23 @@ fi
 CAULDRON_WEB_UNIT="/etc/systemd/system/cauldron-web.service"
 CAULDRON_CLIENT_UNIT="/etc/systemd/system/cauldron-client.service"
 
+# If the provided python looks like it's from a virtualenv, locate the activate script
+VENV_DIR=""
+ACTIVATE_SCRIPT=""
+if [[ "${PYTHON_CMD}" == */bin/python* ]]; then
+  # python path like /path/to/venv/bin/python or /path/to/venv/bin/python3
+  maybe_bin_dir=$(dirname "${PYTHON_CMD}")
+  maybe_venv_dir=$(dirname "${maybe_bin_dir}")
+  if [[ -f "${maybe_venv_dir}/bin/activate" ]]; then
+    VENV_DIR="${maybe_venv_dir}"
+    ACTIVATE_SCRIPT="${maybe_venv_dir}/bin/activate"
+  fi
+fi
+
+if [[ -n "${VENV_DIR}" ]]; then
+  echo "Detected virtualenv at: ${VENV_DIR} (activate: ${ACTIVATE_SCRIPT})"
+fi
+
 generate_web_unit() {
   cat <<EOF
 [Unit]
@@ -73,7 +90,17 @@ Type=simple
 User=${TARGET_USER}
 WorkingDirectory=${PROJECT_DIR}
 Environment=PYTHONUNBUFFERED=1
-ExecStart=${PYTHON_CMD} -m cauldron.web.server.server
+EOF
+
+  if [[ -n "${ACTIVATE_SCRIPT}" ]]; then
+    cat <<EOF
+ExecStart=/bin/bash -lc 'source "${ACTIVATE_SCRIPT}" >/dev/null 2>&1 && cd "${PROJECT_DIR}" && exec "${PYTHON_CMD}" -m cauldron.web.server.server'
+EOF
+  else
+    cat <<EOF
+ExecStart=/bin/bash -lc 'cd "${PROJECT_DIR}" && exec "${PYTHON_CMD}" -m cauldron.web.server.server'
+EOF
+  fi
 Restart=on-failure
 RestartSec=5
 StandardOutput=journal
@@ -95,7 +122,17 @@ Type=simple
 User=${TARGET_USER}
 WorkingDirectory=${HTTP_DIR}
 Environment=PYTHONUNBUFFERED=1
-ExecStart=${PYTHON_CMD} -m http.server ${HTTP_PORT} --directory ${HTTP_DIR}
+EOF
+
+  if [[ -n "${ACTIVATE_SCRIPT}" ]]; then
+    cat <<EOF
+ExecStart=/bin/bash -lc 'source "${ACTIVATE_SCRIPT}" >/dev/null 2>&1 && cd "${HTTP_DIR}" && exec "${PYTHON_CMD}" -m http.server ${HTTP_PORT} --directory "${HTTP_DIR}"'
+EOF
+  else
+    cat <<EOF
+ExecStart=/bin/bash -lc 'cd "${HTTP_DIR}" && exec "${PYTHON_CMD}" -m http.server ${HTTP_PORT} --directory "${HTTP_DIR}"'
+EOF
+  fi
 Restart=on-failure
 RestartSec=5
 StandardOutput=journal
