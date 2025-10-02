@@ -213,23 +213,18 @@ class Cauldron(ICauldron):
         effect = led_effect.EffectChain(
             self._strip,
             [
-                led_effect.EffectWithDuration(bubbling_effect, 120),
                 led_effect.EffectWithDuration(
-                    led_effect.TransitionEffect(
-                        self._strip, randomize=True, duration=5
-                    ),
-                    5,
+                    led_effect.TransitionEffect(self._strip, randomize=True),
+                    10,
                 ),
                 led_effect.EffectWithDuration(
-                    led_effect.TravelingLightEffect(
-                        self._strip, [[0, 0, 0], [0, 256, 0]]
-                    ),
-                    30,
+                    led_effect.TransitionEffect(self._strip, randomize=True),
+                    10,
                 ),
             ],
         )
         # Use the new RepeatedEffectChainPlayer with Duration objects
-        self._bubbling_player = players.LedEffectPlayer(effect, 15)
+        self._bubbling_player = players.LedEffectPlayer(effect, 30)
 
         segment = AudioSegment.from_file(self._bubbling_wav)
         segment.frame_rate = int(segment.frame_rate / 4)

@@ -103,25 +103,17 @@ class EffectChain(LedEffect):
                     self._strip[:] = duration.effect.input_colors[0]
                 # Run the effect with time offset
                 duration.effect.update(t_mod - elapsed)
+                self.show()
                 if idx == len(self._durations) - 1:
                     self._last_effect_color = duration.effect.output_colors
                 break
             self._prev_output_colors = duration.effect.output_colors
             elapsed += duration.seconds
 
-        # Only call reset() once per transition between durations
-        if active_idx is not None and self._last_active_idx is not None:
-            if active_idx != self._last_active_idx:
-                # If wrapping from last to first, also reset the last effect
-                if (
-                    active_idx == 0
-                    and self._last_active_idx == len(self._durations) - 1
-                ):
-                    self._durations[self._last_active_idx].effect.reset()
-                next_idx = (self._last_active_idx + 1) % len(self._durations)
+            next_idx = (self._last_active_idx + 1) % len(self._durations)
+            if active_idx != next_idx:
                 self._durations[next_idx].effect.reset()
         self._last_active_idx = active_idx
-        self.show()
 
     def _disable_children_internal_show(self):
         for d in self._durations:
@@ -387,7 +379,6 @@ class TransitionEffect(LedEffect):
             if per_led_rates is not None
             else [1.0] * self._num_pixels
         )
-        self._last_target = None
         self._init_targets(target_colors)
 
     def _init_targets(self, target_colors):
@@ -400,7 +391,6 @@ class TransitionEffect(LedEffect):
         else:
             # Single color for all LEDs
             self._target_colors = np.array(target_colors, dtype=float)
-        self._last_target = self._target_colors.copy()
 
     def update(self, t: float):
         # t: seconds since transition started
@@ -430,7 +420,7 @@ class TransitionEffect(LedEffect):
         return [self._target_colors] if self._target_colors is not None else []
 
     def reset(self):
-        self._init_targets(None)
+        self._target_colors = None
 
 
 class BubblingEffect(LedEffect):

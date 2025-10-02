@@ -104,6 +104,7 @@ class UdpStreamStrip(RgbArrayStrip):
         self._address = address
         self._port = port
         self._socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        self._socket.setsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF, 65536)
         self._show_callback = None
         self._brightness = brightness
 
@@ -119,7 +120,9 @@ class UdpStreamStrip(RgbArrayStrip):
     def show(self):
         pixels = self.get_pixels(PixelOrder.RGB)
         brightness = int(self._brightness * 255)
-        pixels = ((np.uint64(pixels) * brightness) >> 8).astype(np.uint8)
+        pixels = ((pixels.astype(np.uint16) * brightness) >> 8).astype(
+            np.uint8
+        )
         data = pixels.tobytes()
         self._socket.sendto(data, (self._address, self._port))
         if self._show_callback:

@@ -23,13 +23,11 @@ bubbling_effect = led_effect.BubblingEffect(
 effect = led_effect.EffectChain(
     strip,
     [
-        led_effect.EffectWithDuration(bubbling_effect, 120),
         led_effect.EffectWithDuration(
             led_effect.TransitionEffect(strip, randomize=True), 5
         ),
         led_effect.EffectWithDuration(
-            led_effect.TravelingLightEffect(strip, [[0, 0, 0], [0, 256, 0]]),
-            5,
+            led_effect.TransitionEffect(strip, randomize=True), 5
         ),
     ],
 )
