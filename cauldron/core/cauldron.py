@@ -6,10 +6,11 @@ import threading
 import logging
 import numpy as np
 
+import cauldron.assets.audio as audio_assets
 import cauldron.config.config as config
-import cauldron.core.led_effect as led_effect
+import cauldron.core.new_led_effect as led_effect
 import cauldron.core.led_strip as led_strip
-import cauldron.core.players as players
+import cauldron.core.new_players as players
 
 
 class ICauldron(abc.ABC):
@@ -81,9 +82,6 @@ class Cauldron(ICauldron):
             rt_output_device or AudioStream.output_device_names[0]
         )
 
-        # Initialize audio paths using the audio assets module
-        import cauldron.assets.audio as audio_assets
-
         self._bubbling_wav = audio_assets.get_path(config.AUDIO_BUBBLING)
         self._explosion_wav = audio_assets.get_path(config.AUDIO_EXPLOSION)
         # Pool all soundbites into a single list from config.AUDIO_SOUNDBITES
@@ -97,8 +95,7 @@ class Cauldron(ICauldron):
         self._current_colors = self._colors[self._current_color_index]
 
         # Initialize bubbling effects players
-        self._bubbling_effect: players.LedEffect = None
-        self._bubbling_player: players.RepeatedEffectChainPlayer = None
+        self._bubbling_player: players.LedEffectPlayer = None
         self._bubbling_handle: players.Handle = None
         self._bubbling_audio_player: players.AudioPlayer = None
         self._bubbling_audio_handle: players.Handle = None
@@ -169,7 +166,7 @@ class Cauldron(ICauldron):
         audio = players.AudioPlayer(audio_segment)
 
         a2b_effect = led_effect.AudioToBrightnessEffect(
-            self._strip, audio_segment, frame_speed_ms=config.FRAME_SPEED_MS
+            self._strip, audio_segment
         )
         effect_player = players.LedEffectPlayer(a2b_effect)
         av_player = players.AudioVisualPlayer(effect_player, audio)
@@ -212,52 +209,43 @@ class Cauldron(ICauldron):
         def random_color():
             return np.random.randint(0, 256, size=3).tolist()
 
-        # Initial random colors
-        color0 = random_color()
-        color1 = random_color()
-        self._current_bubbling_colors = (color0, color1)
-
-        self._bubbling_effect = led_effect.BubblingEffect(
+        bubbling_effect = led_effect.BubblingEffect(
             self._strip,
-            [color0, color1],
+            [random_color(), random_color()],
             config.BUBBLE_LENGTHS,
             config.BUBBLE_PROB_WEIGHTS,
             config.BUBBLE_POP_SPEEDS,
             config.BUBBLE_PROB_WEIGHTS,
             config.MAX_BUBBLES,
             config.BUBBLE_SPAWN_PROB,
-            frame_speed_ms=config.FRAME_SPEED_MS,
         )
-
+        effect = led_effect.EffectChain(
+            self._strip,
+            [
+                led_effect.EffectWithDuration(bubbling_effect, 120),
+                led_effect.EffectWithDuration(
+                    led_effect.TransitionEffect(self._strip, randomize=True), 5
+                ),
+                led_effect.EffectWithDuration(
+                    led_effect.TravelingLightEffect(
+                        self._strip, [[0, 0, 0], [0, 256, 0]]
+                    ),
+                    5,
+                ),
+            ],
+        )
         # Use the new RepeatedEffectChainPlayer with Duration objects
-        self._bubbling_player = players.RepeatedEffectChainPlayer(
-            led_effect.Duration(led_effect.RandomColorTransition(2, 2), 5),
-            led_effect.Duration(self._bubbling_effect, 120),
-        )
+        self._bubbling_player = players.LedEffectPlayer(effect)
 
         segment = AudioSegment.from_file(self._bubbling_wav)
         segment.frame_rate = int(segment.frame_rate / 4)
         self._bubbling_audio_player = players.AudioPlayer(segment)
-
-    def _set_random_colors(self):
-        """Selects a new set of colors and applies it to the LedStrip."""
-        with self._lock:
-            self._current_color_index = choice(
-                [
-                    i
-                    for i in range(0, len(self._colors))
-                    if i != self._current_color_index
-                ]
-            )
-            self._current_colors = self._colors[self._current_color_index]
-            self._bubbling_effect.input_colors = self._current_colors
 
     def cause_explosion(self):
         """Causing an explosion will change the color and strobe the lights."""
         if self._explosion_handle is not None:
             self._explosion_handle.stop_wait()
         self._explosion_handle = self._explosion_player.play()
-        self._set_random_colors()
 
     def play_random_voice(self):
         """Plays a random soundbite."""

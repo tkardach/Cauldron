@@ -1,11 +1,9 @@
 import matplotlib.pyplot as plt
+import numpy as np
+
+import cauldron.core.new_led_effect as led_effect
 from cauldron.core.led_strip import MockStrip
-from cauldron.core.new_led_effect import (
-    TravelingLightEffect,
-    EffectChain,
-    EffectWithDuration,
-    TransitionEffect,
-)
+
 
 # Make sure to import the corrected MockPlayer class
 from cauldron.core.new_players import MockEffectPlayer
@@ -13,30 +11,28 @@ from cauldron.core.new_players import MockEffectPlayer
 
 # 1. Set up the strip and effect
 strip = MockStrip(num_pixels=50)
-base_color = [0, 0, 0]
-light_color = [200, 50, 50]
-effect_a = TravelingLightEffect(
-    strip, [base_color, light_color], 10, 1, fade_type="linear"
+
+
+def random_color():
+    return np.random.randint(0, 256, size=3).tolist()
+
+
+bubbling_effect = led_effect.BubblingEffect(
+    strip, [random_color(), random_color()]
 )
-effect_b = TravelingLightEffect(
-    strip,
-    [base_color, light_color],
-    10,
-    1,
-    fade_type="linear",
-    reverse=True,
-    start_index=49,
-)
-transition_effect = TransitionEffect(strip, randomize=True, duration=2)
-effect = EffectChain(
+effect = led_effect.EffectChain(
     strip,
     [
-        EffectWithDuration(effect_a, 1),
-        EffectWithDuration(effect_b, 1),
-        EffectWithDuration(transition_effect, 2),
+        led_effect.EffectWithDuration(bubbling_effect, 120),
+        led_effect.EffectWithDuration(
+            led_effect.TransitionEffect(strip, randomize=True), 5
+        ),
+        led_effect.EffectWithDuration(
+            led_effect.TravelingLightEffect(strip, [[0, 0, 0], [0, 256, 0]]),
+            5,
+        ),
     ],
 )
-
 # 2. Create the player instance
 player = MockEffectPlayer(strip, effect, fps=60.0)
 

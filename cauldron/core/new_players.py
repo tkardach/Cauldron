@@ -3,15 +3,17 @@ import logging
 import matplotlib.pyplot as plt
 import matplotlib.animation as animation
 import numpy as np
+from pedalboard.io import AudioStream
+from pydub import AudioSegment
+import simpleaudio as sa
 import time
 import threading
-from typing import Callable
+from typing import Any, Callable
 
 from cauldron.core.led_strip import LedStrip
 from cauldron.core.new_led_effect import LedEffect
 
 
-# ... (The first part of the file including Player, Handle, and LedEffectPlayer is unchanged) ...
 def busy_sleep(seconds_to_sleep):
     """Busy sleep guarantees more precise timing when sleeping."""
     start = time.time()
@@ -340,3 +342,165 @@ class MockEffectPlayer:
         if not self._is_playing or self._fig is None:
             return
         plt.close(self._fig)
+
+
+class AudioPlayer(Player):
+    """Plays an AudioSegment."""
+
+    def __init__(self, seg: AudioSegment):
+        super().__init__()
+        self._sound = seg
+        self._play_buffer = None
+        self._duration_seconds = seg.duration_seconds
+
+    def _create_play_buffer(self, seg: AudioSegment) -> sa.PlayObject:
+        """Creates an audio buffer which can be played."""
+        return sa.play_buffer(
+            seg.raw_data,
+            num_channels=seg.channels,
+            bytes_per_sample=seg.sample_width,
+            sample_rate=seg.frame_rate,
+        )
+
+    def _loop(self):
+        """Loops the audio segment until explicitly stopped."""
+        while self._is_playing:
+            try:
+                self._play_buffer = self._create_play_buffer(self._sound * 10)
+                self._play_buffer.wait_done()
+            except Exception as e:
+                logging.exception("Error during audio loop: %s", e)
+                break
+
+    def _play(self):
+        """Plays the audio segment."""
+        try:
+            self._play_buffer = self._create_play_buffer(self._sound)
+            self._play_buffer.wait_done()
+        except Exception as e:
+            logging.exception("Error during audio play: %s", e)
+        with self._condition:
+            self._is_playing = False
+            self._condition.notify_all()
+
+    def duration_seconds(self) -> float:
+        """Returns the duration of the audio segment in seconds."""
+        return self._duration_seconds
+
+    def stop(self, wait: bool = False) -> None:
+        """Stops the player if it is currently playing."""
+        if self._play_buffer:
+            try:
+                self._play_buffer.stop()
+            except Exception as e:
+                logging.warning("Error stopping audio buffer: %s", e)
+        super().stop(wait)
+
+
+class AudioVisualPlayer(Player):
+    """Plays both audio and LED visuals simultaneously using the new Player interface."""
+
+    def __init__(self, effect_player: "Player", audio_player: "Player"):
+        super().__init__()
+        self._effect_player = effect_player
+        self._audio_player = audio_player
+        self._effect_handle = None
+        self._audio_handle = None
+
+    def _predicate(self) -> bool:
+        """Returns True if both audio and visual players are done playing."""
+        return not (
+            (self._audio_handle and self._audio_handle.is_playing())
+            or (self._effect_handle and self._effect_handle.is_playing())
+        )
+
+    def _loop(self):
+        self._effect_handle = self._effect_player.loop()
+        self._audio_handle = self._audio_player.loop()
+        with self._condition:
+            self._condition.wait_for(self._predicate)
+
+    def _play(self):
+        self._effect_handle = self._effect_player.play()
+        self._audio_handle = self._audio_player.play()
+        with self._condition:
+            self._condition.wait_for(self._predicate)
+
+    def stop(self, wait: bool = False) -> None:
+        if self._effect_handle:
+            self._effect_handle.stop_wait()
+            self._effect_handle = None
+        if self._audio_handle:
+            self._audio_handle.stop_wait()
+            self._audio_handle = None
+        super().stop(wait)
+
+
+class MockAudioVisualPlayer:
+    """Mock version of AudioVisualPlayer for visualization/testing."""
+
+    def __init__(self, effect_player, audio_player):
+        self._effect_player = effect_player
+        self._audio_player = audio_player
+        self._effect_handle = None
+        self._audio_handle = None
+
+    def play(self):
+        self._effect_handle = self._effect_player.play()
+        self._audio_handle = self._audio_player.play()
+        # For mocks, just return a tuple of handles
+        return (self._effect_handle, self._audio_handle)
+
+    def loop(self):
+        self._effect_handle = self._effect_player.loop()
+        self._audio_handle = self._audio_player.loop()
+        return (self._effect_handle, self._audio_handle)
+
+    def stop(self):
+        if self._effect_handle:
+            self._effect_handle.stop()
+            self._effect_handle = None
+        if self._audio_handle:
+            self._audio_handle.stop()
+            self._audio_handle = None
+
+
+class RealtimeAudioPlayer(Player):
+    """Plays an AudioSegment in real time with effects."""
+
+    def __init__(
+        self,
+        effects: list[Any],
+        input_device: str = AudioStream.default_input_device_name,
+        output_device: str = AudioStream.default_output_device_name,
+    ):
+        super().__init__()
+        self._effects = effects
+        self._stream = None
+        self._input_device = input_device
+        self._output_device = output_device
+
+    def _loop(self):
+        """Loops the audio segment until explicitly stopped."""
+        with self._condition:
+            try:
+                with AudioStream(
+                    input_device_name=self._input_device,
+                    output_device_name=self._output_device,
+                    buffer_size=1024,
+                    sample_rate=44100,
+                ) as self._stream:
+                    for effect in self._effects:
+                        self._stream.plugins.append(effect)
+                    self._condition.wait_for(self._predicate)
+            except Exception as e:
+                logging.exception("Error in RealtimeAudioPlayer loop: %s", e)
+
+    def _play(self):
+        """Plays the audio segment."""
+        self._loop()
+
+    def stop(self, wait: bool = False) -> None:
+        """Stops the player if it is currently playing."""
+        super().stop(wait)
+        self._stream = None

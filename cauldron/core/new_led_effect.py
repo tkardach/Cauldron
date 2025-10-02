@@ -1,7 +1,9 @@
 import abc
 import math
 import numpy as np
+from pydub import AudioSegment
 import random
+import threading
 
 from cauldron.core.led_strip import LedStrip
 
@@ -494,10 +496,12 @@ class BubblingEffect(LedEffect):
             bubble_t = t - b["start_time"]
             b["bubble"].update(bubble_t)
 
+    @property
     def input_colors(self) -> list[np.ndarray]:
         """Gets the current input colors of the effect."""
         return self._colors
 
+    @input_colors.setter
     def input_colors(self, colors: list):
         """Sets the input colors for the effect."""
         assert len(colors) == 2
@@ -506,9 +510,106 @@ class BubblingEffect(LedEffect):
             np.array(colors[1], dtype=int),
         ]
 
+    @property
     def output_colors(self) -> list[np.ndarray]:
         """The colors to be passed to the next effect. Defaults to input_colors."""
         return self.input_colors
 
     def reset(self):
         pass
+
+
+class AudioToBrightnessEffect(LedEffect):
+    """
+    Changes the brightness of the LedStrip based on AudioSegment volume.
+    Uses update(t) for animation.
+    """
+
+    def __init__(self, strip: LedStrip, segment: AudioSegment):
+        super().__init__(strip)
+        self._lock = threading.Lock()
+        data = np.array(segment.get_array_of_samples())
+        data = np.abs(data.astype(np.int32))
+        self._normalized_data = (data - np.min(data)) / (
+            np.max(data) - np.min(data)
+        )
+        self._duration_s = segment.duration_seconds
+        self._total_frames = len(self._normalized_data)
+        self._starting_brightness = None
+        self._last_t = None
+
+    def update(self, t: float):
+        # t: seconds since animation start
+        if self._starting_brightness is None:
+            self._starting_brightness = self._strip.brightness
+        # Map t to frame index
+        frame_idx = int((t / self._duration_s) * self._total_frames)
+        frame_idx = np.clip(frame_idx, 0, self._total_frames - 1)
+        brightness = np.clip(
+            self._normalized_data[frame_idx] + self._starting_brightness,
+            0,
+            1,
+        )
+        self._strip.brightness = brightness
+        self._strip.show()
+        self._last_t = t
+
+    @property
+    def input_colors(self) -> list:
+        return []
+
+    @input_colors.setter
+    def input_colors(self, colors: list):
+        pass
+
+    @property
+    def output_colors(self) -> list:
+        return []
+
+    def reset(self):
+        with self._lock:
+            self._starting_brightness = None
+            self._last_t = None
+
+
+class BrightnessEffect(LedEffect):
+    """
+    Changes the brightness of the LedStrip using update(t).
+    If input_colors is set, expects a single float value [brightness].
+    """
+
+    def __init__(self, strip: LedStrip, initial_brightness: float = None):
+        super().__init__(strip)
+        self._lock = threading.Lock()
+        self._starting_brightness = (
+            initial_brightness
+            if initial_brightness is not None
+            else self._strip.brightness
+        )
+        self._brightness = self._starting_brightness
+
+    def update(self, t: float):
+        # t is ignored; brightness is set via input_colors
+        with self._lock:
+            self._strip.brightness = self._brightness
+        self._strip.show()
+
+    @property
+    def input_colors(self) -> list:
+        # Return current brightness as a list
+        return [self._brightness]
+
+    @input_colors.setter
+    def input_colors(self, colors: list):
+        # Expect a single float value
+        with self._lock:
+            if colors and isinstance(colors[0], (float, int)):
+                self._brightness = float(colors[0])
+
+    @property
+    def output_colors(self) -> list:
+        return [self._brightness]
+
+    def reset(self):
+        with self._lock:
+            self._brightness = self._starting_brightness
