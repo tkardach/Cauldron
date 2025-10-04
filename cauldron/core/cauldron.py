@@ -214,11 +214,11 @@ class Cauldron(ICauldron):
             self._strip,
             [
                 led_effect.EffectWithDuration(
-                    led_effect.TransitionEffect(self._strip, randomize=True),
+                    led_effect.TransitionEffect(self._strip, randomize=True, duration=10),
                     10,
                 ),
                 led_effect.EffectWithDuration(
-                    led_effect.TransitionEffect(self._strip, randomize=True),
+                    led_effect.TransitionEffect(self._strip, randomize=True, duration=10),
                     10,
                 ),
             ],
