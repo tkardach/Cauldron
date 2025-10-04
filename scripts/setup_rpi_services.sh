@@ -80,6 +80,12 @@ if [[ -n "${VENV_DIR}" ]]; then
 fi
 
 generate_web_unit() {
+  if [[ -n "${ACTIVATE_SCRIPT}" ]]; then
+    exec_start="/bin/bash -lc 'source \"${ACTIVATE_SCRIPT}\" >/dev/null 2>&1 && cd \"${PROJECT_DIR}\" && exec \"${PYTHON_CMD}\" -m cauldron.web.server.server'"
+  else
+    exec_start="/bin/bash -lc 'cd \"${PROJECT_DIR}\" && exec \"${PYTHON_CMD}\" -m cauldron.web.server.server'"
+  fi
+
   cat <<EOF
 [Unit]
 Description=Cauldron Web Server
@@ -90,17 +96,7 @@ Type=simple
 User=${TARGET_USER}
 WorkingDirectory=${PROJECT_DIR}
 Environment=PYTHONUNBUFFERED=1
-EOF
-
-  if [[ -n "${ACTIVATE_SCRIPT}" ]]; then
-    cat <<EOF
-ExecStart=/bin/bash -lc 'source "${ACTIVATE_SCRIPT}" >/dev/null 2>&1 && cd "${PROJECT_DIR}" && exec "${PYTHON_CMD}" -m cauldron.web.server.server'
-EOF
-  else
-    cat <<EOF
-ExecStart=/bin/bash -lc 'cd "${PROJECT_DIR}" && exec "${PYTHON_CMD}" -m cauldron.web.server.server'
-EOF
-  fi
+ExecStart=${exec_start}
 Restart=on-failure
 RestartSec=5
 StandardOutput=journal
@@ -112,6 +108,12 @@ EOF
 }
 
 generate_client_unit() {
+  if [[ -n "${ACTIVATE_SCRIPT}" ]]; then
+    exec_start="/bin/bash -lc 'source \"${ACTIVATE_SCRIPT}\" >/dev/null 2>&1 && cd \"${HTTP_DIR}\" && exec \"${PYTHON_CMD}\" -m http.server ${HTTP_PORT} --directory \"${HTTP_DIR}\"'"
+  else
+    exec_start="/bin/bash -lc 'cd \"${HTTP_DIR}\" && exec \"${PYTHON_CMD}\" -m http.server ${HTTP_PORT} --directory \"${HTTP_DIR}\"'"
+  fi
+
   cat <<EOF
 [Unit]
 Description=Cauldron Static HTTP Server
@@ -122,17 +124,7 @@ Type=simple
 User=${TARGET_USER}
 WorkingDirectory=${HTTP_DIR}
 Environment=PYTHONUNBUFFERED=1
-EOF
-
-  if [[ -n "${ACTIVATE_SCRIPT}" ]]; then
-    cat <<EOF
-ExecStart=/bin/bash -lc 'source "${ACTIVATE_SCRIPT}" >/dev/null 2>&1 && cd "${HTTP_DIR}" && exec "${PYTHON_CMD}" -m http.server ${HTTP_PORT} --directory "${HTTP_DIR}"'
-EOF
-  else
-    cat <<EOF
-ExecStart=/bin/bash -lc 'cd "${HTTP_DIR}" && exec "${PYTHON_CMD}" -m http.server ${HTTP_PORT} --directory "${HTTP_DIR}"'
-EOF
-  fi
+ExecStart=${exec_start}
 Restart=on-failure
 RestartSec=5
 StandardOutput=journal
