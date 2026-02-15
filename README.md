@@ -1,3 +1,9 @@
+# Cauldron
+
+Halloween IoT special effects system.
+
+The project consists of a distributed architecture where a "dumb" microcontroller acts as a high-speed peripheral receiver, while a central Python server manages the complex logic and audio-visual orchestration
+
 ## Setup Python Environment
 
 ### Prerequisites
