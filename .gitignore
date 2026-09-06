@@ -1,12 +1,7 @@
-env
-<<<<<<< HEAD
+.env
+.pytest_cache
+.vscode
 __pycache__
-*.egg-info
+
+__init__.pyc
 pyproject.toml
-=======
-**/__pycache__
-**/*.*egg-info
->>>>>>> Add audio implementation
-src
-lib
-target

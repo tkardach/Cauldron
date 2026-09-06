@@ -1,7 +1,7 @@
 import unittest
 import numpy as np
 from cauldron.core.led_strip import RgbArrayStrip
-from cauldron.core.new_led_effect import BubbleEffect, BubblingEffect
+from cauldron.core.led_effect import BubbleEffect, BubblingEffect
 
 
 class TestBubbleEffect(unittest.TestCase):
@@ -21,9 +21,9 @@ class TestBubbleEffect(unittest.TestCase):
             bubble_pop_speed=self.bubble_pop_speed,
         )
 
-    def test_bubble_start(self):
-        self.effect.update(0.0)
-        # At t=0, bubble should be at max amplitude
+    def test_bubble_peak(self):
+        self.effect.update(self.bubble_pop_speed)
+        # The bubble reaches its peak halfway through its two-phase cycle.
         bubble_pixels = self.strip[
             self.bubble_index : self.bubble_index + self.bubble_length
         ]
@@ -35,8 +35,8 @@ class TestBubbleEffect(unittest.TestCase):
         self.assertTrue(np.all(after == self.base_color))
 
     def test_bubble_end(self):
-        self.effect.update(self.bubble_pop_speed)
-        # At t=pop_speed, bubble should be base color
+        self.effect.update(2 * self.bubble_pop_speed)
+        # At the end of the cycle, the bubble should be base color.
         bubble_pixels = self.strip[
             self.bubble_index : self.bubble_index + self.bubble_length
         ]
@@ -83,11 +83,11 @@ class TestBubblingEffect(unittest.TestCase):
         # There should be at least one non-base pixel
         self.assertTrue(np.any(self.strip.get_pixels() != self.base_color))
         # After enough time, all bubbles should fade
-        self.effect.update(2.0)
+        self.effect._bubble_spawn_prob = 0.0
         self.effect.update(3.0)
         # All pixels should be base color
         self.assertTrue(
-            np.allclose(self.strip.get_pixels(), self.base_color, atol=1)
+            np.all(self.strip.get_pixels() == self.base_color)
         )
 
     def test_no_overlap(self):
