@@ -5,7 +5,6 @@ import queue
 import socket
 from typing import Callable
 
-
 _RGB_COLOR_SIZE = 3
 
 
@@ -97,9 +96,7 @@ class RgbArrayStrip(LedStrip):
 
 
 class UdpStreamStrip(RgbArrayStrip):
-    def __init__(
-        self, num_pixels: int, address: str, port: int, brightness: float = 1
-    ):
+    def __init__(self, num_pixels: int, address: str, port: int, brightness: float = 1):
         RgbArrayStrip.__init__(self, num_pixels)
         self._address = address
         self._port = port
@@ -120,9 +117,7 @@ class UdpStreamStrip(RgbArrayStrip):
     def show(self):
         pixels = self.get_pixels(PixelOrder.RGB)
         brightness = int(self._brightness * 255)
-        pixels = ((pixels.astype(np.uint16) * brightness) >> 8).astype(
-            np.uint8
-        )
+        pixels = ((pixels.astype(np.uint16) * brightness) >> 8).astype(np.uint8)
         data = pixels.tobytes()
         self._socket.sendto(data, (self._address, self._port))
         if self._show_callback:

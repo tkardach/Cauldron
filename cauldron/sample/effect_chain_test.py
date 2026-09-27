@@ -1,12 +1,12 @@
 import matplotlib.pyplot as plt
 import numpy as np
 
-import cauldron.core.new_led_effect as led_effect
+import cauldron.core.led_effect as led_effect
 from cauldron.core.led_strip import MockStrip
 
 
 # Make sure to import the corrected MockPlayer class
-from cauldron.core.new_players import MockEffectPlayer
+from cauldron.core.players import MockEffectPlayer
 
 
 # 1. Set up the strip and effect

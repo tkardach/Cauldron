@@ -1,6 +1,12 @@
 import unittest
+from unittest.mock import patch
 import numpy as np
-from cauldron.core.led_strip import RgbArrayStrip, MockStrip, PixelOrder
+from cauldron.core.led_strip import (
+    RgbArrayStrip,
+    MockStrip,
+    PixelOrder,
+    UdpStreamStrip,
+)
 
 
 class TestLedStrip(unittest.TestCase):
@@ -69,6 +75,20 @@ class TestLedStrip(unittest.TestCase):
         callback_func()
 
         self.assertTrue(callback_called)
+
+    @patch("cauldron.core.led_strip.socket.socket")
+    def test_udp_strip_dithers_fractional_pixel_values(self, mock_socket):
+        strip = UdpStreamStrip(
+            num_pixels=1, address="localhost", port=5456, brightness=0.2
+        )
+        strip[0] = [102.5, 0, 0]
+
+        frames = []
+        for _ in range(4):
+            strip.show()
+            frames.append(mock_socket.return_value.sendto.call_args.args[0][0])
+
+        self.assertEqual([frame[0] for frame in frames], [20, 21, 20, 21])
 
 
 if __name__ == "__main__":

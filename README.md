@@ -12,19 +12,11 @@ On Mac OS
 brew install ffmpeg
 ```
 
-On Raspberry Pi
-```
-sudo apt-get install -y python3-dev libasound2-dev
-```
-
 ### Development Environment 
 Within the project root directory.
 ```
-# Install virtualenv
-pip install virtualenv
-
-# Create virtual environment
-virtualenv env
+# Setup python venv
+python -m venv env
 
 # Activate the project environment
 source env/bin/activate
@@ -38,23 +30,10 @@ pip install -r requirements.txt
 pip install -e .
 
 # Run sample scripts
-python sample/led_effect.py
-```
+python -m sample.effect_chain_test
 
-### Raspberry Pi LED Environment
-
-Within the project root directory.
-```
-sudo apt-get install libbluetooth-dev
-
-# Install all project dependencies
-python3 -m pip install -r requirements_rpi.txt
-
-# Install all local packages
-sudo python3 -m pip install -e .
-
-# Run sample scripts
-sudo python3 sample/led_effect.py
+# Run script
+python -m scripts.run_cauldron
 ```
 
 ## Design

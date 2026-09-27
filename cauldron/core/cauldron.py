@@ -8,9 +8,9 @@ import numpy as np
 
 import cauldron.assets.audio as audio_assets
 import cauldron.config.config as config
-import cauldron.core.new_led_effect as led_effect
+import cauldron.core.led_effect as led_effect
 import cauldron.core.led_strip as led_strip
-import cauldron.core.new_players as players
+import cauldron.core.players as players
 
 
 class ICauldron(abc.ABC):
@@ -75,12 +75,8 @@ class Cauldron(ICauldron):
         self._strip = strip
 
         # Store realtime audio device configuration
-        self._rt_input_device = (
-            rt_input_device or AudioStream.input_device_names[0]
-        )
-        self._rt_output_device = (
-            rt_output_device or AudioStream.output_device_names[0]
-        )
+        self._rt_input_device = rt_input_device or AudioStream.input_device_names[0]
+        self._rt_output_device = rt_output_device or AudioStream.output_device_names[0]
 
         self._bubbling_wav = audio_assets.get_path(config.AUDIO_BUBBLING)
         self._explosion_wav = audio_assets.get_path(config.AUDIO_EXPLOSION)
@@ -119,10 +115,7 @@ class Cauldron(ICauldron):
 
     def start(self):
         """Start the cauldron effects."""
-        if (
-            self._bubbling_audio_handle is not None
-            or self._bubbling_handle is not None
-        ):
+        if self._bubbling_audio_handle is not None or self._bubbling_handle is not None:
             return
         self._bubbling_audio_handle = self._bubbling_audio_player.loop()
         self._bubbling_handle = self._bubbling_player.loop()
@@ -158,11 +151,11 @@ class Cauldron(ICauldron):
         self, audio_segment: AudioSegment
     ) -> players.AudioVisualPlayer:
         """Creates an AudioVisualPlayer using an AudioToBrightness effect."""
-        audio = players.AudioPlayer(audio_segment)
-
-        a2b_effect = led_effect.AudioToBrightnessEffect(
-            self._strip, audio_segment
+        audio = players.AudioPlayer(
+            audio_segment, output_device_name=self._rt_output_device
         )
+
+        a2b_effect = led_effect.AudioToBrightnessEffect(self._strip, audio_segment)
         effect_player = players.LedEffectPlayer(a2b_effect)
         av_player = players.AudioVisualPlayer(effect_player, audio)
         return av_player
@@ -182,13 +175,10 @@ class Cauldron(ICauldron):
         """Initializes soundbite effects."""
         self._soundbite_audio = self._init_audio_list(self._soundbite_wavs)
 
-    def _init_audio_list(
-        self, wav_list: list[str]
-    ) -> list[players.AudioVisualPlayer]:
+    def _init_audio_list(self, wav_list: list[str]) -> list[players.AudioVisualPlayer]:
         """Helper to create AudioVisualPlayers from a list of wav files."""
         return [
-            self._create_a2b_av_effect(AudioSegment.from_file(wav))
-            for wav in wav_list
+            self._create_a2b_av_effect(AudioSegment.from_file(wav)) for wav in wav_list
         ]
 
     def _init_explosion_effects(self):
@@ -214,21 +204,27 @@ class Cauldron(ICauldron):
             self._strip,
             [
                 led_effect.EffectWithDuration(
-                    led_effect.TransitionEffect(self._strip, randomize=True, duration=10),
+                    led_effect.TransitionEffect(
+                        self._strip, randomize=True, duration=10
+                    ),
                     10,
                 ),
                 led_effect.EffectWithDuration(
-                    led_effect.TransitionEffect(self._strip, randomize=True, duration=10),
+                    led_effect.TransitionEffect(
+                        self._strip, randomize=True, duration=10
+                    ),
                     10,
                 ),
             ],
         )
         # Use the new RepeatedEffectChainPlayer with Duration objects
-        self._bubbling_player = players.LedEffectPlayer(effect, 30)
+        self._bubbling_player = players.LedEffectPlayer(effect, 30.0)
 
         segment = AudioSegment.from_file(self._bubbling_wav)
         segment.frame_rate = int(segment.frame_rate / 4)
-        self._bubbling_audio_player = players.AudioPlayer(segment)
+        self._bubbling_audio_player = players.AudioPlayer(
+            segment, output_device_name=self._rt_output_device
+        )
 
     def cause_explosion(self):
         """Causing an explosion will change the color and strobe the lights."""
@@ -270,9 +266,7 @@ class Cauldron(ICauldron):
         if player:
             self._rt_voice_handle = player.loop()
         else:
-            logging.warning(
-                f"Voice '{voice_name}' not found in config.VOICES."
-            )
+            logging.warning(f"Voice '{voice_name}' not found in config.VOICES.")
 
     def stop_active_voice(self):
         """Stops the active realtime voice."""
@@ -348,9 +342,7 @@ class CauldronRunner:
             _HELP_STRING
             + "\n"
             + "Voices: "
-            + ", ".join(
-                [f"{key}: {name}" for key, name in self._voice_key_map.items()]
-            )
+            + ", ".join([f"{key}: {name}" for key, name in self._voice_key_map.items()])
             + "\n"
         )
         try:

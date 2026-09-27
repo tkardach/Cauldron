@@ -1,23 +1,20 @@
 import matplotlib.pyplot as plt
 from cauldron.core.led_strip import MockStrip
-from cauldron.core.new_led_effect import BubbleEffect
+from cauldron.core.led_effect import BubblingEffect
 
 # Make sure to import the corrected MockPlayer class
-from cauldron.core.new_players import MockEffectPlayer
+from cauldron.core.players import MockEffectPlayer
 
 
 # 1. Set up the strip and effect
-strip = MockStrip(num_pixels=20)
+strip = MockStrip(num_pixels=50)
 base_color = [10, 20, 30]
 bubble_color = [200, 180, 160]
 bubble_index = 10
 bubble_length = 5
-effect = BubbleEffect(
+effect = BubblingEffect(
     strip,
-    bubble_index,
     [base_color, bubble_color],
-    # You were missing bubble_length in your original test script
-    bubble_length=bubble_length,
 )
 
 # 2. Create the player instance

@@ -1,17 +1,17 @@
 import abc
 import logging
-from cauldron.core.led_strip import LedStrip
-from cauldron.core.led_effect import LedEffect, BrightnessEffect, Duration
-import matplotlib.animation as animation
 import matplotlib.pyplot as plt
+import matplotlib.animation as animation
 import numpy as np
+import time
+import threading
+from typing import Callable
 from pedalboard.io import AudioStream
 from pydub import AudioSegment
-import simpleaudio as sa
-import sounddevice as sd
-import threading
-import time
 from typing import Any, Callable
+
+from cauldron.core.led_strip import LedStrip
+from cauldron.core.led_effect import LedEffect
 
 
 def busy_sleep(seconds_to_sleep):
@@ -146,31 +146,49 @@ class Player(abc.ABC):
 class LedEffectPlayer(Player):
     """Plays an LedEffect on an LedStrip."""
 
-    def __init__(self, effect: LedEffect):
+    def __init__(self, effect: LedEffect, fps: float = 30.0):
+        """
+        Args:
+            effect: The LedEffect to play.
+            fps: Frames per second for updating the effect.
+        """
         super().__init__()
         self._effect = effect
+        self._fps = fps
+        self._frame_interval_s = 1.0 / fps
+        self._start_time_s: float | None = None
         self._play_time_s: float | None = None
 
     def _loop(self):
         """Loop thread function to loop LedEffect."""
+        self._start_time_s = time.time()
         while self._is_playing:
             try:
-                self._effect.apply_effect()
+                t = time.time() - self._start_time_s
+                self._effect.update(t)
             except Exception as e:
                 logging.exception("Error applying LED effect: %s", e)
                 break
-            busy_sleep(self._effect.frame_speed_ms / 1000.0)
+            busy_sleep(self._frame_interval_s)
+        with self._condition:
+            self._is_playing = False
+            self._condition.notify_all()
 
     def _play(self):
         """Play thread function to play LedEffect."""
-        end_time = time.time() + self._play_time_s
+        self._start_time_s = time.time()
+        end_time = self._start_time_s + self._play_time_s
         while self._is_playing and time.time() < end_time:
             try:
-                self._effect.apply_effect()
+                t = time.time() - self._start_time_s
+                self._effect.update(t)
             except Exception as e:
                 logging.exception("Error applying LED effect: %s", e)
                 break
-            busy_sleep(self._effect.frame_speed_ms / 1000.0)
+            busy_sleep(self._frame_interval_s)
+        with self._condition:
+            self._is_playing = False
+            self._condition.notify_all()
 
     def play_for(self, time_s: float = 5.0) -> Handle:
         """Plays the LedEffect for time_s seconds."""
@@ -193,104 +211,71 @@ class LedEffectPlayer(Player):
         super().stop(wait)
 
 
-class RepeatedEffectChainPlayer(Player):
-    """
-    Plays a sequence of LedEffects in order, passing output colors from one effect to the next.
-    When the end of the chain is reached, loops back to the start, using the last effect's output as the input for the first.
-    """
-
-    def __init__(self, *effects_with_duration: Duration):
-        """
-        effects_with_duration: list of led_effect.Duration objects
-        """
-        super().__init__()
-        assert len(effects_with_duration) > 0
-        self._effects = effects_with_duration
-        self._current_index = 0
-        self._current_effect = effects_with_duration[
-            self._current_index
-        ].effect
-        self._next_end_time = (
-            time.time() + self._effects[self._current_index].seconds
-        )
-
-    def _run_iteration(self):
-        now = time.time()
-        if now >= self._next_end_time:
-            prev_index = self._current_index
-            # Move to the next effect in the chain
-            self._current_index = (self._current_index + 1) % len(
-                self._effects
-            )
-            self._current_effect = self._effects[self._current_index].effect
-            # Set the input colors of the new effect to the output colors of the previous effect
-            self._current_effect.input_colors = self._effects[
-                prev_index
-            ].effect.output_colors
-            self._current_effect.reset()
-            # Set the end time for the new effect
-            self._next_end_time = (
-                now + self._effects[self._current_index].end_time()
-            )
-        try:
-            self._current_effect.apply_effect()
-        except Exception as e:
-            logging.exception("Error applying LED effect: %s", e)
-        busy_sleep(self._effect.frame_speed_ms / 1000.0)
-
-    def _loop(self):
-        """Loop through the chain of effects indefinitely."""
-        while self._is_playing:
-            self._run_iteration()
-
-    def _play(self):
-        """Play thread function to play LedEffect."""
-        end_time = time.time() + self._play_time_s
-        while self._is_playing and time.time() < end_time:
-            self._run_iteration()
-
-    def stop(self, wait: bool = False) -> None:
-        super().stop(wait)
-
-
 class AudioPlayer(Player):
     """Plays an AudioSegment."""
 
-    def __init__(self, seg: AudioSegment):
+    _SAMPLE_RATE = 44100
+    _CHUNK_SIZE = 2048
+
+    def __init__(
+        self,
+        seg: AudioSegment,
+        output_device_name: str | None = None,
+    ):
         super().__init__()
-        self._sound = seg
-        self._play_buffer = None
+        seg = seg.set_sample_width(2).set_frame_rate(self._SAMPLE_RATE)
+        samples = np.frombuffer(seg.raw_data, dtype=np.int16)
+        self._sound = np.ascontiguousarray(
+            samples.reshape(-1, seg.channels).T / 32768.0,
+            dtype=np.float32,
+        )
+        self._channels = seg.channels
+        self._output_device_name = (
+            output_device_name or AudioStream.default_output_device_name
+        )
         self._duration_seconds = seg.duration_seconds
 
-    def _create_play_buffer(self, seg: AudioSegment) -> sa.PlayObject:
-        """Creates an audio buffer which can be played."""
-        return sa.play_buffer(
-            seg.raw_data,
-            num_channels=seg.channels,
-            bytes_per_sample=seg.sample_width,
-            sample_rate=seg.frame_rate,
-        )
+    def _write_sound(self, stream: AudioStream) -> None:
+        for start in range(0, self._sound.shape[1], self._CHUNK_SIZE):
+            if not self._is_playing:
+                return
+            stream.write(
+                self._sound[:, start : start + self._CHUNK_SIZE],
+                self._SAMPLE_RATE,
+            )
 
     def _loop(self):
         """Loops the audio segment until explicitly stopped."""
-        while self._is_playing:
-            try:
-                self._play_buffer = self._create_play_buffer(self._sound * 10)
-                self._play_buffer.wait_done()
-            except Exception as e:
-                logging.exception("Error during audio loop: %s", e)
-                break
+        try:
+            with AudioStream(
+                output_device_name=self._output_device_name,
+                sample_rate=self._SAMPLE_RATE,
+                num_output_channels=self._channels,
+            ) as stream:
+                while self._is_playing:
+                    self._write_sound(stream)
+        except Exception as e:
+            logging.exception("Error during audio loop: %s", e)
+        finally:
+            with self._condition:
+                self._is_playing = False
+                self._condition.notify_all()
 
     def _play(self):
         """Plays the audio segment."""
         try:
-            self._play_buffer = self._create_play_buffer(self._sound)
-            self._play_buffer.wait_done()
+            with AudioStream(
+                output_device_name=self._output_device_name,
+                sample_rate=self._SAMPLE_RATE,
+                num_output_channels=self._channels,
+            ) as stream:
+                self._write_sound(stream)
         except Exception as e:
             logging.exception("Error during audio play: %s", e)
-        with self._condition:
-            self._is_playing = False
-            self._condition.notify_all()
+        finally:
+            with self._condition:
+                self._is_playing = False
+                self._condition.notify_all()
 
     def duration_seconds(self) -> float:
         """Returns the duration of the audio segment in seconds."""
@@ -298,74 +283,75 @@ class AudioPlayer(Player):
 
     def stop(self, wait: bool = False) -> None:
         """Stops the player if it is currently playing."""
-        if self._play_buffer:
-            try:
-                self._play_buffer.stop()
-            except Exception as e:
-                logging.warning("Error stopping audio buffer: %s", e)
         super().stop(wait)
 
 
 class AudioVisualPlayer(Player):
-    """Plays both audio and LED visuals simultaneously."""
+    """Plays both audio and LED visuals simultaneously using the new Player interface."""
 
-    def __init__(
-        self, effect_player: LedEffectPlayer, audio_player: AudioPlayer
-    ):
+    def __init__(self, effect_player: "Player", audio_player: "Player"):
         super().__init__()
         self._effect_player = effect_player
         self._audio_player = audio_player
-        self._playing = False
         self._effect_handle = None
         self._audio_handle = None
 
     def _predicate(self) -> bool:
         """Returns True if both audio and visual players are done playing."""
         return not (
-            self._audio_handle.is_playing() or self._effect_handle.is_playing()
+            (self._audio_handle and self._audio_handle.is_playing())
+            or (self._effect_handle and self._effect_handle.is_playing())
         )
 
     def _loop(self):
-        """Loops the audio and visual players."""
+        self._effect_handle = self._effect_player.loop()
+        self._audio_handle = self._audio_player.loop()
         with self._condition:
-            try:
-                self._audio_handle = self._audio_player.loop()
-                self._effect_handle = self._effect_player.loop()
-                self._condition.wait_for(self._predicate)
-            except Exception as e:
-                logging.exception("Error in AudioVisualPlayer loop: %s", e)
+            self._condition.wait_for(self._predicate)
 
     def _play(self):
-        """Plays the audio and visual players once."""
+        self._effect_handle = self._effect_player.play()
+        self._audio_handle = self._audio_player.play()
         with self._condition:
-            try:
-                self._audio_handle = self._audio_player.play()
-                self._effect_handle = self._effect_player.play_for(
-                    self._audio_player.duration_seconds()
-                )
-                self._condition.wait_for(self._predicate)
-            except Exception as e:
-                logging.exception("Error in AudioVisualPlayer play: %s", e)
+            self._condition.wait_for(self._predicate)
 
     def stop(self, wait: bool = False) -> None:
-        """Stops the player if it is currently playing."""
-        if self._handle is None:
-            return None
-        if self._effect_handle is not None:
-            try:
-                self._effect_handle.stop_wait()
-            except Exception as e:
-                logging.warning("Error stopping effect handle: %s", e)
-
-        if self._audio_handle is not None:
-            try:
-                self._audio_handle.stop_wait()
-            except Exception as e:
-                logging.warning("Error stopping audio handle: %s", e)
-
+        if self._effect_handle:
+            self._effect_handle.stop_wait()
+            self._effect_handle = None
+        if self._audio_handle:
+            self._audio_handle.stop_wait()
+            self._audio_handle = None
         super().stop(wait)
+
+
+class MockAudioVisualPlayer:
+    """Mock version of AudioVisualPlayer for visualization/testing."""
+
+    def __init__(self, effect_player, audio_player):
+        self._effect_player = effect_player
+        self._audio_player = audio_player
         self._effect_handle = None
         self._audio_handle = None
+
+    def play(self):
+        self._effect_handle = self._effect_player.play()
+        self._audio_handle = self._audio_player.play()
+        # For mocks, just return a tuple of handles
+        return (self._effect_handle, self._audio_handle)
+
+    def loop(self):
+        self._effect_handle = self._effect_player.loop()
+        self._audio_handle = self._audio_player.loop()
+        return (self._effect_handle, self._audio_handle)
+
+    def stop(self):
+        if self._effect_handle:
+            self._effect_handle.stop()
+            self._effect_handle = None
+        if self._audio_handle:
+            self._audio_handle.stop()
+            self._audio_handle = None
 
 
 class RealtimeAudioPlayer(Player):
@@ -409,128 +395,467 @@ class RealtimeAudioPlayer(Player):
         self._stream = None
 
 
-# MOCK CLASSES
-# Consider moving these to a separate mock_players.py for better modularity.
+class MockHandle:
+    """A simple handle for controlling the MockPlayer."""
+
+    def __init__(self, player: "MockEffectPlayer"):
+        self._player = player
+
+    def stop(self):
+        """Stops the animation by closing the plot window."""
+        self._player.stop()
+
+    def stop_wait(self):
+        """Stops the animation. The action is immediate, so no wait is needed."""
+        self.stop()
 
 
-class MockAudioVisualPlayer(AudioVisualPlayer):
+class DropdownMenu:
+    """A minimal dropdown menu widget for Matplotlib figures.
+
+    Clicking the collapsed menu expands the list of options; clicking an
+    option selects it, collapses the menu and invokes `on_select`.
+    """
+
     def __init__(
-        self, effect_player: LedEffectPlayer, audio_player: AudioPlayer
+        self,
+        ax,
+        options: list,
+        on_select: Callable[[int, str], None] = None,
+        initial_index: int = 0,
+        label: str = None,
     ):
-        super().__init__(effect_player, audio_player)
+        assert options, "A DropdownMenu requires at least one option."
+        self._ax = ax
+        self._options = list(options)
+        self._on_select = on_select
+        self._selected_index = int(np.clip(initial_index, 0, len(options) - 1))
+        self._label = label
+        self._expanded = False
+        self._option_axes = []
 
-    def play(self):
-        self._play()
-
-    def loop(self):
-        self._loop()
-
-
-class MockEffectHandle(Handle):
-    def __del__(self):
-        return None
-
-
-def _plot_led_strip(strip, effect, frame_speed_ms: int):
-    """Helper for plotting LED strip and effect animation (used by mocks)."""
-    brightness_x_limit = 100
-    fig, ax = plt.subplots(nrows=3, ncols=2, figsize=(12, 6))
-    num_pixels = strip.num_pixels()
-    x = np.arange(0, num_pixels, 1)
-    y = [3] * num_pixels
-    scat_ax = ax[0, 0]
-    r_ax = ax[0, 1]
-    g_ax = ax[1, 1]
-    b_ax = ax[2, 1]
-    brightness_ax = ax[1, 0]
-    scat_ax.set(xlim=[0, num_pixels], ylim=[0, 6])
-    r_ax.set(xlim=[0, num_pixels], ylim=[0, 255])
-    r_ax.set_title("RGB channels")
-    g_ax.set(xlim=[0, num_pixels], ylim=[0, 255])
-    b_ax.set(xlim=[0, num_pixels], ylim=[0, 255])
-    brightness_ax.set(xlim=[0, brightness_x_limit], ylim=[0, 1.1])
-    scat = scat_ax.scatter(x, y, s=50)
-    (r_plot,) = r_ax.plot(strip[:, 0])
-    (g_plot,) = g_ax.plot(strip[:, 1])
-    (b_plot,) = b_ax.plot(strip[:, 2])
-    brightness_values = []
-    (brightness_plot,) = brightness_ax.plot(brightness_values)
-    r_plot.set_color((1, 0, 0))
-    g_plot.set_color((0, 1, 0))
-    b_plot.set_color((0, 0, 1))
-
-    def set_pixels(pixels: np.array):
-        brightness_values.append(strip.brightness)
-        while len(brightness_values) > brightness_x_limit:
-            brightness_values.pop(0)
-        scat.set_color(pixels / 255.0)
-        r_plot.set_ydata(pixels[:, 0])
-        g_plot.set_ydata(pixels[:, 1])
-        b_plot.set_ydata(pixels[:, 2])
-        brightness_plot.set_data(
-            np.arange(0, len(brightness_values), 1), brightness_values
+        self._ax.set_navigate(False)
+        self._ax.set_xticks([])
+        self._ax.set_yticks([])
+        self._ax.set_facecolor("#efefef")
+        if label:
+            self._ax.set_title(label, fontsize=8, loc="left")
+        self._text = self._ax.text(
+            0.5,
+            0.5,
+            self._button_text(),
+            ha="center",
+            va="center",
+            fontsize=8,
+            transform=self._ax.transAxes,
         )
-        fig.canvas.flush_events()
+        self._create_option_axes()
+        self._cid = self._ax.figure.canvas.mpl_connect(
+            "button_press_event", self._on_click
+        )
 
-    strip.set_show_callback(set_pixels)
+    @property
+    def selected_index(self) -> int:
+        """Index of the currently selected option."""
+        return self._selected_index
 
-    def update(_):
-        effect.apply_effect()
-        return scat
+    @property
+    def selected_option(self) -> str:
+        """Label of the currently selected option."""
+        return self._options[self._selected_index]
 
-    ani = animation.FuncAnimation(
-        fig=fig,
-        func=update,
-        frames=60,
-        interval=frame_speed_ms,
-    )
-    plt.show()
-    return MockEffectHandle(effect)
+    @property
+    def expanded(self) -> bool:
+        """True while the option list is visible."""
+        return self._expanded
+
+    @property
+    def option_axes(self) -> list:
+        return self._option_axes
+
+    def _button_text(self) -> str:
+        return f"{self.selected_option}  \u25bc"
+
+    def _create_option_axes(self):
+        """Creates one (hidden) axes per option underneath the menu."""
+        fig = self._ax.figure
+        x0, y0, width, height = self._ax.get_position().bounds
+        for i, option in enumerate(self._options):
+            rect = [x0, y0 - height * (i + 1), width, height]
+            option_ax = fig.add_axes(rect, zorder=10)
+            option_ax.set_navigate(False)
+            option_ax.set_xticks([])
+            option_ax.set_yticks([])
+            option_ax.set_facecolor("#ffffff")
+            option_ax.text(
+                0.5,
+                0.5,
+                option,
+                ha="center",
+                va="center",
+                fontsize=8,
+                transform=option_ax.transAxes,
+            )
+            option_ax.set_visible(False)
+            self._option_axes.append(option_ax)
+
+    def _set_expanded(self, expanded: bool):
+        self._expanded = expanded
+        for option_ax in self._option_axes:
+            option_ax.set_visible(expanded)
+        self._redraw()
+
+    def _redraw(self):
+        canvas = self._ax.figure.canvas
+        if canvas is not None:
+            canvas.draw_idle()
+
+    def toggle(self):
+        """Expands/collapses the menu."""
+        self._set_expanded(not self._expanded)
+
+    def select(self, index: int):
+        """Selects an option by index, notifying the `on_select` callback."""
+        index = int(index)
+        assert 0 <= index < len(self._options), "Invalid dropdown index."
+        self._selected_index = index
+        self._text.set_text(self._button_text())
+        self._set_expanded(False)
+        if self._on_select is not None:
+            self._on_select(index, self._options[index])
+
+    def _on_click(self, event):
+        if event.inaxes is self._ax:
+            self.toggle()
+            return
+        if not self._expanded:
+            return
+        for i, option_ax in enumerate(self._option_axes):
+            if event.inaxes is option_ax:
+                self.select(i)
+                return
+        # A click anywhere else collapses the menu.
+        self._set_expanded(False)
+
+    def disconnect(self):
+        """Disconnects the menu from the canvas."""
+        canvas = self._ax.figure.canvas
+        if canvas is not None:
+            canvas.mpl_disconnect(self._cid)
 
 
-class MockEffectPlayer(Player):
-    def __init__(self, strip: LedStrip, effect: LedEffect):
-        super().__init__()
-        self._strip = strip
+class MockEffectPlayer:
+    """
+    Visualizes an LED effect using Matplotlib.
+
+    The player supports both a single LedStrip and a grid of equal length
+    LedStrips (as used by effects such as the WaterDropletEffect). The grid
+    is drawn with every strip laid out horizontally, strip 0 being the top
+    row of the "LED Grid". The "Brightness" heat map uses the same 2D
+    layout, while the RGB channel graphs render the strip(s) picked with the
+    dropdown menu.
+
+    IMPORTANT: This player must run on the main thread due to OS restrictions on
+    GUI toolkits. To use it, call a method like `loop()` or `play_for()`,
+    which returns a handle, and then call `plt.show()` from your main script.
+    """
+
+    ALL_STRIPS_LABEL = "All Strips"
+
+    def __init__(
+        self,
+        strip: LedStrip | list = None,
+        effect: LedEffect = None,
+        fps: float = 30.0,
+    ):
+        """
+        Args:
+            strip: A single LedStrip or a list/grid of equal length LedStrips.
+                When omitted, the strips are pulled from the effect.
+            effect: The LedEffect to visualize.
+            fps: Frames per second of the animation.
+        """
+        assert effect is not None, "MockEffectPlayer requires an LedEffect."
+        self._strips = self._normalize_strips(strip, effect)
+        # Kept for backwards compatibility (single strip visualizations).
+        self._strip = self._strips[0]
+        self._num_strips = len(self._strips)
+        self._num_pixels = self._strip.num_pixels()
         self._effect = effect
+        self._fps = fps
+        self._play_time_s: float | None = None
+        self._is_playing = False
+        self._fig = None
+        self._ani = None
+        self._start_time = None
+        self._dropdown = None
+        # Index 0 selects every strip, index i + 1 selects strip i.
+        self._selected_option = 0
+        self._r_lines = []
+        self._g_lines = []
+        self._b_lines = []
 
-    def _loop(self):
-        return _plot_led_strip(
-            self._strip, self._effect, self._effect.frame_speed_ms
+    @staticmethod
+    def _normalize_strips(strip, effect) -> list:
+        """Returns the list of LedStrips that should be visualized."""
+        if strip is None:
+            strip = getattr(effect, "led_strips", None)
+        if strip is None:
+            strip = getattr(effect, "_strip", None)
+        assert strip is not None, "MockEffectPlayer requires an LedStrip."
+        strips = [strip] if isinstance(strip, LedStrip) else list(strip)
+        assert strips, "MockEffectPlayer requires at least one LedStrip."
+        num_pixels = strips[0].num_pixels()
+        for led_strip in strips:
+            assert (
+                led_strip.num_pixels() == num_pixels
+            ), "Every LedStrip of the grid must have the same LED count."
+        return strips
+
+    # ------------------------------------------------------------------
+    # Data helpers
+    # ------------------------------------------------------------------
+    @property
+    def strips(self) -> list:
+        """The LedStrips that make up the visualized grid."""
+        return self._strips
+
+    @property
+    def dropdown(self) -> DropdownMenu:
+        """The dropdown menu used to pick the RGB channel source."""
+        return self._dropdown
+
+    def _strip_options(self) -> list:
+        return [self.ALL_STRIPS_LABEL] + [f"Strip {i}" for i in range(self._num_strips)]
+
+    def _pixel_grid(self) -> np.ndarray:
+        """Returns a (num_strips, num_pixels, 3) grid of RGB values."""
+        return np.array(
+            [np.asarray(strip.get_pixels(), dtype=float) for strip in self._strips]
         )
 
-    def _play(self):
-        return self._loop()
-
-    def play(self):
-        return self._loop()
-
-    def loop(self):
-        return self._loop()
-
-    def stop(self):
-        return None
-
-
-class MockStripPlayer(Player):
-    def __init__(self, strip: LedStrip, frame_speed_ms: int = 100):
-        super().__init__()
-        self._strip = strip
-        self._frame_speed_ms = frame_speed_ms
-
-    def _loop(self):
-        return _plot_led_strip(
-            self._strip, BrightnessEffect(self._strip), self._frame_speed_ms
+    def _brightness_grid(self, pixels: np.ndarray) -> np.ndarray:
+        """Returns the (num_strips, num_pixels) brightness of every LED."""
+        strip_brightness = np.array(
+            [strip.brightness for strip in self._strips], dtype=float
+        )
+        return np.clip(
+            (pixels.max(axis=2) / 255.0) * strip_brightness[:, None], 0.0, 1.0
         )
 
-    def _play(self):
-        return self._loop()
+    def _on_dropdown_select(self, index: int, _label: str):
+        self._selected_option = index
+        self._apply_line_visibility()
+        if self._fig is not None and self._fig.canvas is not None:
+            self._fig.canvas.draw_idle()
 
-    def play(self):
-        return self._loop()
+    def _apply_line_visibility(self):
+        """Shows only the RGB lines of the currently selected strip(s)."""
+        for i in range(self._num_strips):
+            visible = self._selected_option == 0 or self._selected_option == i + 1
+            for lines in (self._r_lines, self._g_lines, self._b_lines):
+                lines[i].set_visible(visible)
 
-    def loop(self):
-        return self._loop()
+    def select_strip(self, index: int):
+        """Selects which strip the RGB graphs display (-1 for all strips)."""
+        option = 0 if index < 0 else index + 1
+        if self._dropdown is not None:
+            self._dropdown.select(option)
+        else:
+            self._on_dropdown_select(option, "")
+
+    # ------------------------------------------------------------------
+    # Plot setup
+    # ------------------------------------------------------------------
+    def _setup_plot(self):
+        """Initializes the Matplotlib figure and axes for the animation."""
+        self._fig = plt.figure(figsize=(13, 7))
+        try:
+            self._fig.canvas.manager.set_window_title("LED Effect Mock Player")
+        except AttributeError:
+            pass
+        grid_spec = self._fig.add_gridspec(
+            6,
+            2,
+            width_ratios=[1.6, 1.0],
+            left=0.06,
+            right=0.96,
+            top=0.86,
+            bottom=0.08,
+            hspace=1.4,
+            wspace=0.22,
+        )
+        grid_ax = self._fig.add_subplot(grid_spec[0:3, 0])
+        brightness_ax = self._fig.add_subplot(grid_spec[3:6, 0])
+        r_ax = self._fig.add_subplot(grid_spec[0:2, 1])
+        g_ax = self._fig.add_subplot(grid_spec[2:4, 1])
+        b_ax = self._fig.add_subplot(grid_spec[4:6, 1])
+        self._grid_ax = grid_ax
+        self._brightness_ax = brightness_ax
+        self._rgb_axes = (r_ax, g_ax, b_ax)
+
+        pixels = self._pixel_grid()
+
+        # --- "LED Grid": every strip laid out horizontally ----------------
+        x = np.tile(np.arange(self._num_pixels), self._num_strips)
+        y = np.repeat(np.arange(self._num_strips), self._num_pixels)
+        grid_ax.set(
+            xlim=(-1, self._num_pixels),
+            ylim=(self._num_strips - 0.5, -0.5),
+            title="LED Grid",
+        )
+        grid_ax.set_ylabel("Strip")
+        grid_ax.set_facecolor("#101010")
+        grid_ax.set_yticks(np.arange(self._num_strips))
+        marker_size = max(8, min(100, 4000 / max(self._num_pixels, 1)))
+        self._scat = grid_ax.scatter(
+            x, y, s=marker_size, c=pixels.reshape(-1, 3) / 255.0
+        )
+
+        # --- "Brightness": 2D heat map using the same layout --------------
+        brightness = self._brightness_grid(pixels)
+        brightness_ax.set(title="Brightness")
+        brightness_ax.set_ylabel("Strip")
+        brightness_ax.set_xlabel("LED")
+        self._brightness_image = brightness_ax.imshow(
+            brightness,
+            cmap="inferno",
+            vmin=0.0,
+            vmax=1.0,
+            aspect="auto",
+            interpolation="nearest",
+            extent=(-0.5, self._num_pixels - 0.5, self._num_strips - 0.5, -0.5),
+        )
+        brightness_ax.set_yticks(np.arange(self._num_strips))
+        self._fig.colorbar(
+            self._brightness_image, ax=brightness_ax, fraction=0.04, pad=0.02
+        )
+
+        # --- RGB channels of the selected strip(s) ------------------------
+        self._r_lines, self._g_lines, self._b_lines = [], [], []
+        titles = ("RGB Channels - Red", "Green", "Blue")
+        colors = ("r", "g", "b")
+        x_data = np.arange(self._num_pixels)
+        for axis, title, color, lines in zip(
+            self._rgb_axes,
+            titles,
+            colors,
+            (self._r_lines, self._g_lines, self._b_lines),
+        ):
+            axis.set(
+                xlim=(-1, self._num_pixels),
+                ylim=(-5, 260),
+                title=title,
+            )
+            for strip_index in range(self._num_strips):
+                (line,) = axis.plot(
+                    x_data,
+                    np.zeros(self._num_pixels),
+                    color=color,
+                    alpha=1.0 if self._num_strips == 1 else 0.75,
+                    linewidth=1.2,
+                    label=f"Strip {strip_index}",
+                )
+                lines.append(line)
+
+        # --- Dropdown used to pick the plotted strip(s) -------------------
+        dropdown_ax = self._fig.add_axes([0.72, 0.90, 0.2, 0.045])
+        self._dropdown = DropdownMenu(
+            dropdown_ax,
+            self._strip_options(),
+            on_select=self._on_dropdown_select,
+            initial_index=self._selected_option,
+            label="RGB Source",
+        )
+        self._apply_line_visibility()
+
+    def _artists(self) -> tuple:
+        return tuple(
+            [self._scat, self._brightness_image]
+            + self._r_lines
+            + self._g_lines
+            + self._b_lines
+        )
+
+    def _refresh_render(self):
+        """Pulls the current pixel data and refreshes every plot."""
+        pixels = self._pixel_grid()
+        self._scat.set_color(pixels.reshape(-1, 3) / 255.0)
+        self._brightness_image.set_data(self._brightness_grid(pixels))
+        x_data = np.arange(self._num_pixels)
+        for strip_index in range(self._num_strips):
+            strip_pixels = pixels[strip_index]
+            self._r_lines[strip_index].set_data(x_data, strip_pixels[:, 0])
+            self._g_lines[strip_index].set_data(x_data, strip_pixels[:, 1])
+            self._b_lines[strip_index].set_data(x_data, strip_pixels[:, 2])
+        return self._artists()
+
+    def _update_frame(self, frame):
+        """The function called by FuncAnimation on each frame."""
+        if not self._is_playing:
+            return self._artists()
+
+        t = time.time() - self._start_time
+        if self._play_time_s is not None and t >= self._play_time_s:
+            self.stop()
+            return self._artists()
+
+        self._effect.update(t)
+        return self._refresh_render()
+
+    def _on_window_close(self, evt):
+        """A dedicated callback for when the Matplotlib window is closed."""
+        if self._is_playing:
+            if hasattr(self, "_ani") and self._ani and self._ani.event_source:
+                self._ani.event_source.stop()
+            self._is_playing = False
+
+    def _start_animation(self):
+        """Internal method to create the plot and FuncAnimation object."""
+        if self._is_playing:
+            return
+        self._setup_plot()
+        self._start_time = time.time()
+        interval_ms = 1000.0 / self._fps
+
+        self._fig.canvas.mpl_connect("close_event", self._on_window_close)
+
+        # Blitting is disabled so the dropdown menu and the brightness heat
+        # map are always redrawn correctly.
+        self._ani = animation.FuncAnimation(
+            fig=self._fig,
+            func=self._update_frame,
+            interval=interval_ms,
+            blit=False,
+            cache_frame_data=False,
+        )
+        self._is_playing = True
+
+    def play(self) -> MockHandle:
+        """Configures the animation to run for 5 seconds."""
+        return self.play_for()
+
+    def play_for(self, time_s: float = 5.0) -> MockHandle:
+        """Configures the animation to run for a specific duration."""
+        self._effect.reset()
+        self._play_time_s = time_s
+        self._start_animation()
+        return MockHandle(self)
+
+    def loop(self) -> MockHandle:
+        """Configures the animation to run indefinitely."""
+        self._effect.reset()
+        self._play_time_s = None
+        self._start_animation()
+        return MockHandle(self)
 
     def stop(self):
-        return None
+        """Programmatically stops the animation by closing the plot window."""
+        if not self._is_playing or self._fig is None:
+            return
+        self._is_playing = False
+        if self._ani is not None and self._ani.event_source is not None:
+            self._ani.event_source.stop()
+        if self._dropdown is not None:
+            self._dropdown.disconnect()
+        plt.close(self._fig)
