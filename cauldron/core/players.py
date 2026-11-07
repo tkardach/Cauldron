@@ -12,6 +12,7 @@ from typing import Any, Callable
 
 from cauldron.core.led_strip import LedStrip
 from cauldron.core.led_effect import LedEffect
+from cauldron.core.live_audio import LiveBrightnessAnalyzer
 
 
 def busy_sleep(seconds_to_sleep):
@@ -257,6 +258,7 @@ class AudioPlayer(Player):
         except Exception as e:
             logging.exception("Error during audio loop: %s", e)
         finally:
+            self._stream = None
             with self._condition:
                 self._is_playing = False
                 self._condition.notify_all()
@@ -355,35 +357,52 @@ class MockAudioVisualPlayer:
 
 
 class RealtimeAudioPlayer(Player):
-    """Plays an AudioSegment in real time with effects."""
+    """Streams live input through audio effects and an optional visual analyzer."""
 
     def __init__(
         self,
         effects: list[Any],
         input_device: str = AudioStream.default_input_device_name,
         output_device: str = AudioStream.default_output_device_name,
+        visual_analyzer: LiveBrightnessAnalyzer | None = None,
     ):
         super().__init__()
         self._effects = effects
+        self._visual_analyzer = visual_analyzer
         self._stream = None
         self._input_device = input_device
         self._output_device = output_device
 
     def _loop(self):
-        """Loops the audio segment until explicitly stopped."""
-        with self._condition:
-            try:
-                with AudioStream(
-                    input_device_name=self._input_device,
-                    output_device_name=self._output_device,
-                    buffer_size=1024,
-                    sample_rate=44100,
-                ) as self._stream:
-                    for effect in self._effects:
-                        self._stream.plugins.append(effect)
-                    self._condition.wait_for(self._predicate)
-            except Exception as e:
-                logging.exception("Error in RealtimeAudioPlayer loop: %s", e)
+        """Capture live audio until explicitly stopped."""
+        try:
+            with AudioStream(
+                input_device_name=self._input_device,
+                output_device_name=self._output_device,
+                buffer_size=2048,
+                sample_rate=44100,
+            ) as self._stream:
+                for effect in self._effects:
+                    self._stream.plugins.append(effect)
+                if self._visual_analyzer is None:
+                    with self._condition:
+                        self._condition.wait_for(self._predicate)
+                else:
+                    while self._is_playing:
+                        audio_chunk = self._stream.read()
+                        if audio_chunk.size:
+                            self._visual_analyzer.process(
+                                audio_chunk, self._stream.sample_rate
+                            )
+                        else:
+                            with self._condition:
+                                self._condition.wait_for(self._predicate, timeout=0.01)
+        except Exception as e:
+            logging.exception("Error in RealtimeAudioPlayer loop: %s", e)
+        finally:
+            with self._condition:
+                self._is_playing = False
+                self._condition.notify_all()
 
     def _play(self):
         """Plays the audio segment."""
@@ -392,7 +411,6 @@ class RealtimeAudioPlayer(Player):
     def stop(self, wait: bool = False) -> None:
         """Stops the player if it is currently playing."""
         super().stop(wait)
-        self._stream = None
 
 
 class MockHandle:

@@ -1,367 +1,176 @@
 import abc
-from pedalboard.io import AudioStream
-from pydub import AudioSegment
-from random import choice
-import threading
 import logging
-import numpy as np
+import threading
+from collections.abc import Iterable
 
-import cauldron.assets.audio as audio_assets
-import cauldron.config.config as config
-import cauldron.core.led_effect as led_effect
-import cauldron.core.led_strip as led_strip
-import cauldron.core.players as players
+from cauldron.core.players import Handle, Player
+from cauldron.core.events import EventBus, Events
 
 
 class ICauldron(abc.ABC):
-    """Interface to control the Cauldron."""
+    """Generic player lifecycle interface."""
 
     @abc.abstractmethod
     def start(self) -> None:
-        """Start the cauldron effects."""
-        pass
+        """Start configured loop players."""
 
     @abc.abstractmethod
     def stop(self) -> None:
-        """Stop all cauldron effects."""
-        pass
+        """Stop managed players."""
 
     @abc.abstractmethod
     def is_playing(self) -> bool:
-        """Check if the cauldron is currently playing any effects."""
-        pass
-
-    @abc.abstractmethod
-    def cause_explosion(self) -> None:
-        """Causes the Cauldron to explode, changing the color."""
-        pass
-
-    @abc.abstractmethod
-    def play_random_voice(self) -> None:
-        """Plays a random voice effect."""
-        pass
-
-    @abc.abstractmethod
-    def play_sound(self, sound: int | str) -> None:
-        """
-        Play a soundbite by index or name from config.AUDIO_SOUNDBITES.
-        Args:
-            sound: Index (int) or filename (str) from AUDIO_SOUNDBITES.
-        """
-        pass
-
-    @abc.abstractmethod
-    def start_voice(self, voice_name: str) -> None:
-        """Plays the voice in realtime."""
-        pass
-
-    @abc.abstractmethod
-    def stop_active_voice(self) -> None:
-        """Stops the active realtime voice."""
-        pass
+        """Return whether a managed player is active."""
 
 
 class Cauldron(ICauldron):
-    """Cauldron implementation."""
+    """Manages the lifecycle of an injected collection of players."""
 
     def __init__(
         self,
-        strip: led_strip.LedStrip,
-        rt_input_device: str = None,
-        rt_output_device: str = None,
+        players: Iterable[Player],
+        loop_players: Iterable[Player] = (),
     ):
-        """Initialize the Cauldron with a given LED strip and optional realtime audio devices."""
-        self._lock = threading.Lock()
-        self._strip = strip
+        self._lock = threading.RLock()
+        self._players = list(dict.fromkeys(players))
+        self._loop_players = list(dict.fromkeys(loop_players))
+        unknown_players = set(self._loop_players) - set(self._players)
+        if unknown_players:
+            raise ValueError("loop_players must be included in players")
+        self._handles: dict[Player, Handle] = {}
 
-        # Store realtime audio device configuration
-        self._rt_input_device = rt_input_device or AudioStream.input_device_names[0]
-        self._rt_output_device = rt_output_device or AudioStream.output_device_names[0]
+    def start(self) -> None:
+        """Start all injected players designated to loop."""
+        with self._lock:
+            for player in self._loop_players:
+                handle = self._handles.get(player)
+                if handle is None or not handle.is_playing():
+                    self._handles[player] = player.loop()
 
-        self._bubbling_wav = audio_assets.get_path(config.AUDIO_BUBBLING)
-        self._explosion_wav = audio_assets.get_path(config.AUDIO_EXPLOSION)
-        # Pool all soundbites into a single list from config.AUDIO_SOUNDBITES
-        self._soundbite_wavs = [
-            audio_assets.get_path(wav) for wav in config.AUDIO_SOUNDBITES
-        ]
+    def play(self, player: Player) -> Handle:
+        """Play an injected player once and track its handle."""
+        self._validate_player(player)
+        with self._lock:
+            handle = player.play()
+            self._handles[player] = handle
+            return handle
 
-        # Initialize bubbling effects players
-        self._bubbling_player: players.LedEffectPlayer = None
-        self._bubbling_handle: players.Handle = None
-        self._bubbling_audio_player: players.AudioPlayer = None
-        self._bubbling_audio_handle: players.Handle = None
-        self._init_bubbling_effects()
+    def loop(self, player: Player) -> Handle:
+        """Loop an injected player and track its handle."""
+        self._validate_player(player)
+        with self._lock:
+            handle = player.loop()
+            self._handles[player] = handle
+            return handle
 
-        # Initialize explosion effects
-        self._explosion_handle: players.Handle = None
-        self._explosion_player: players.AudioVisualPlayer = None
-        self._init_explosion_effects()
+    def stop_player(self, player: Player) -> None:
+        """Stop one injected player if it is active."""
+        self._validate_player(player)
+        with self._lock:
+            handle = self._handles.pop(player, None)
+            if handle is not None:
+                handle.stop_wait()
 
-        # Initialize voice audio effects
-        self._voice_handle: players.Handle = None
-        self._soundbite_audio: list[players.AudioVisualPlayer] = None
-        self._init_voice_effects()
+    def stop(self) -> None:
+        """Stop all players started through this manager."""
+        with self._lock:
+            handles = list(self._handles.values())
+            for handle in handles:
+                handle.stop_wait()
+            self._handles.clear()
 
-        # Inititalize realtime voice effects
-        self._rt_voice_handle: players.Handle = None
-        self._voice_players: dict[str, players.RealtimeAudioPlayer] = {}
-        self._init_realtime_voice_effects()
+    def is_playing(self) -> bool:
+        """Return whether any managed player is currently active."""
+        with self._lock:
+            return any(handle.is_playing() for handle in self._handles.values())
 
-        # Start the common effect
-        self.start()
-
-    def __del__(self):
-        self.stop()
-
-    def start(self):
-        """Start the cauldron effects."""
-        if self._bubbling_audio_handle is not None or self._bubbling_handle is not None:
-            return
-        self._bubbling_audio_handle = self._bubbling_audio_player.loop()
-        self._bubbling_handle = self._bubbling_player.loop()
-
-    def stop(self):
-        """Stop all cauldron effects."""
-        self._strip.fill((0, 0, 0))
-        self._strip.show()
-        if self._explosion_handle:
-            self._explosion_handle.stop_wait()
-            self._explosion_handle = None
-        if self._bubbling_handle:
-            self._bubbling_handle.stop_wait()
-            self._bubbling_handle = None
-        if self._bubbling_audio_handle:
-            self._bubbling_audio_handle.stop_wait()
-            self._bubbling_audio_handle = None
-        if self._voice_handle:
-            self._voice_handle.stop_wait()
-            self._voice_handle = None
-        if self._rt_voice_handle:
-            self._rt_voice_handle.stop_wait()
-            self._rt_voice_handle = None
-
-    def is_playing(self):
-        """Check if the cauldron is currently playing any effects."""
-        return (
-            self._bubbling_audio_handle.is_playing()
-            and self._bubbling_handle.is_playing()
-        )
-
-    def _create_a2b_av_effect(
-        self, audio_segment: AudioSegment
-    ) -> players.AudioVisualPlayer:
-        """Creates an AudioVisualPlayer using an AudioToBrightness effect."""
-        audio = players.AudioPlayer(
-            audio_segment, output_device_name=self._rt_output_device
-        )
-
-        a2b_effect = led_effect.AudioToBrightnessEffect(self._strip, audio_segment)
-        effect_player = players.LedEffectPlayer(a2b_effect)
-        av_player = players.AudioVisualPlayer(effect_player, audio)
-        return av_player
-
-    def _init_realtime_voice_effects(self):
-        """Initializes realtime voice effects from config.VOICES using direct effect instances."""
-        self._voice_players = {}
-        for name, voice_cfg in config.VOICES.items():
-            effects = voice_cfg.get("effects", [])
-            self._voice_players[name] = players.RealtimeAudioPlayer(
-                effects,
-                input_device=self._rt_input_device,
-                output_device=self._rt_output_device,
-            )
-
-    def _init_voice_effects(self):
-        """Initializes soundbite effects."""
-        self._soundbite_audio = self._init_audio_list(self._soundbite_wavs)
-
-    def _init_audio_list(self, wav_list: list[str]) -> list[players.AudioVisualPlayer]:
-        """Helper to create AudioVisualPlayers from a list of wav files."""
-        return [
-            self._create_a2b_av_effect(AudioSegment.from_file(wav)) for wav in wav_list
-        ]
-
-    def _init_explosion_effects(self):
-        """Initializes the cauldron's explosion effects."""
-        segment = AudioSegment.from_file(self._explosion_wav)
-        segment = segment.set_sample_width(2)
-        segment += 30
-        self._explosion_player = self._create_a2b_av_effect(segment)
-
-    def _init_bubbling_effects(self):
-        """Initializes the bubbling effects with color transitions every 2 minutes, using color pairs."""
-
-        def random_color():
-            return np.random.randint(0, 256, size=3).tolist()
-
-        start_color = random_color()
-        self._strip.fill(start_color)
-        self._strip.show()
-        bubbling_effect = led_effect.BubblingEffect(
-            self._strip, [start_color, random_color()]
-        )
-        effect = led_effect.EffectChain(
-            self._strip,
-            [
-                led_effect.EffectWithDuration(
-                    led_effect.TransitionEffect(
-                        self._strip, randomize=True, duration=10
-                    ),
-                    10,
-                ),
-                led_effect.EffectWithDuration(
-                    led_effect.TransitionEffect(
-                        self._strip, randomize=True, duration=10
-                    ),
-                    10,
-                ),
-            ],
-        )
-        # Use the new RepeatedEffectChainPlayer with Duration objects
-        self._bubbling_player = players.LedEffectPlayer(effect, 30.0)
-
-        segment = AudioSegment.from_file(self._bubbling_wav)
-        segment.frame_rate = int(segment.frame_rate / 4)
-        self._bubbling_audio_player = players.AudioPlayer(
-            segment, output_device_name=self._rt_output_device
-        )
-
-    def cause_explosion(self):
-        """Causing an explosion will change the color and strobe the lights."""
-        if self._explosion_handle is not None:
-            self._explosion_handle.stop_wait()
-        self._explosion_handle = self._explosion_player.play()
-
-    def play_random_voice(self):
-        """Plays a random soundbite."""
-        if self._voice_handle is not None:
-            self._voice_handle.stop_wait()
-        self._voice_handle = choice(self._soundbite_audio).play()
-
-    def play_sound(self, sound: int | str = 0):
-        """
-        Play a soundbite by index or name from config.AUDIO_SOUNDBITES.
-        Args:
-            sound: Index (int) or filename (str) from AUDIO_SOUNDBITES.
-        """
-        if self._voice_handle is not None:
-            self._voice_handle.stop_wait()
-        idx = None
-        if isinstance(sound, int):
-            idx = sound
-        elif isinstance(sound, str):
-            if sound.isdigit():
-                idx = int(sound)
-            elif sound in config.AUDIO_SOUNDBITES:
-                idx = config.AUDIO_SOUNDBITES.index(sound)
-        if idx is not None and 0 <= idx < len(self._soundbite_audio):
-            self._voice_handle = self._soundbite_audio[idx].play()
-        else:
-            logging.warning(f"Invalid sound: {sound}")
-
-    def start_voice(self, voice_name: str):
-        """Plays the selected voice in realtime."""
-        self.stop_active_voice()
-        player = self._voice_players.get(voice_name)
-        if player:
-            self._rt_voice_handle = player.loop()
-        else:
-            logging.warning(f"Voice '{voice_name}' not found in config.VOICES.")
-
-    def stop_active_voice(self):
-        """Stops the active realtime voice."""
-        if self._rt_voice_handle is not None:
-            self._rt_voice_handle.stop_wait()
-
-
-_HELP_STRING: str = f"""
-e:   Explosion
-d:   Start/Stop Demon Voice
-w:   Start/Stop Witch Voice
-1-{len(config.AUDIO_SOUNDBITES)}: Play spooky sounds
-q: exit
-
-Input: 
-"""
+    def _validate_player(self, player: Player) -> None:
+        if player not in self._players:
+            raise ValueError("Player is not managed by this Cauldron")
 
 
 class CauldronRunner:
+    """Reads terminal commands and publishes them without owning a Cauldron."""
+
     def __init__(
         self,
-        strip: led_strip.LedStrip,
-        rt_input_device: str = None,
-        rt_output_device: str = None,
+        event_bus: EventBus,
+        voice_names: Iterable[str] = (),
+        sound_count: int = 0,
     ):
-        self._strip = strip
-        self._rt_input_device = rt_input_device
-        self._rt_output_device = rt_output_device
+        self._event_bus = event_bus
+        self._voice_key_map: dict[str, str] = {}
         self._command_map = {
-            "e": self._explosion,
-            "s": self._stop_voice,
-            "q": self._quit,
+            "b": (Events.TOGGLE_BUBBLES, None),
+            "e": (Events.EXPLOSION, None),
+            "s": (Events.STOP_VOICE, None),
+            "q": (Events.QUIT, None),
         }
-        # Add voice commands dynamically
-        self._voice_key_map = {}
-        for voice_name in config.VOICES.keys():
+        for voice_name in voice_names:
             key_length = 1
-            while voice_name[0:key_length] in self._command_map:
+            while voice_name[:key_length] in self._command_map:
                 key_length += 1
-            key = voice_name[0:key_length]
-            self._command_map[key] = self._make_voice_cmd(voice_name)
+            key = voice_name[:key_length]
+            self._command_map[key] = (Events.START_VOICE, voice_name)
             self._voice_key_map[key] = voice_name
+        self._sound_count = sound_count
         self._running = True
 
-    def _make_voice_cmd(self, voice_name):
-        def cmd(cauldron):
-            cauldron.stop_active_voice()
-            logging.info(f"Playing {voice_name} voice")
-            cauldron.start_voice(voice_name)
-
-        return cmd
-
-    def _explosion(self, cauldron):
-        logging.info("Causing explosion")
-        cauldron.cause_explosion()
-
-    def _stop_voice(self, cauldron):
-        cauldron.stop_active_voice()
-        logging.info("Stopped active voice")
-
-    def _quit(self, cauldron):
-        self._running = False
-        del cauldron
-        logging.info("Exiting CauldronRunner")
-
-    def _run(self):
-        cauldron = Cauldron(
-            self._strip,
-            rt_input_device=self._rt_input_device,
-            rt_output_device=self._rt_output_device,
+    def _help_text(self) -> str:
+        sound_keys = (
+            f"1-{self._sound_count}: Play spooky sounds" if self._sound_count else ""
         )
-        help_string = (
-            _HELP_STRING
-            + "\n"
-            + "Voices: "
-            + ", ".join([f"{key}: {name}" for key, name in self._voice_key_map.items()])
-            + "\n"
+        voice_entries = sorted(
+            self._voice_key_map.items(), key=lambda entry: entry[1].casefold()
         )
+        key_width = max((len(key) for key, _ in voice_entries), default=0)
+        voice_keys = (
+            "\n".join(
+                ["Voices:"]
+                + [f"  {key:<{key_width}}: {name}" for key, name in voice_entries]
+            )
+            if voice_entries
+            else ""
+        )
+        return "\n".join(
+            part
+            for part in (
+                "b: Toggle bubbles",
+                "e: Explosion",
+                "s: Stop active voice",
+                sound_keys,
+                voice_keys,
+                "q: exit",
+            )
+            if part
+        )
+
+    def _run(self) -> None:
+        help_text = self._help_text()
         try:
+            print(help_text)
             while self._running:
-                user = input(help_string).strip()
-                if user.isdigit():
-                    logging.info(f"Playing sound {user}")
-                    cauldron.play_sound(int(user) - 1)
-                elif user in self._command_map:
-                    self._command_map[user](cauldron)
+                command = input("Input: ").strip()
+                if not command:
+                    continue
+                if command.isdigit():
+                    self._event_bus.publish(Events.PLAY_SOUND, int(command) - 1)
+                    continue
+                event, payload = self._command_map.get(
+                    command, (Events.EXPLOSION, None)
+                )
+                if command not in self._command_map:
+                    logging.warning("Unknown command: %s", command)
+                if event == Events.QUIT:
+                    self._running = False
+                if payload is None:
+                    self._event_bus.publish(event)
                 else:
-                    cauldron.cause_explosion()
-                    logging.warning(f"Unknown command: {user}")
-        except Exception as e:
-            logging.exception("Error in CauldronRunner: %s", e)
-            del cauldron
+                    self._event_bus.publish(event, payload)
+        except Exception:
+            logging.exception("Error in CauldronRunner")
+            self._event_bus.publish(Events.QUIT)
 
-    def run(self):
-        """Run the CauldronRunner in a separate thread."""
-        t = threading.Thread(target=self._run)
-        t.start()
-        t.join()
+    def run(self) -> None:
+        """Run the interactive command reader on the calling thread."""
+        self._run()
